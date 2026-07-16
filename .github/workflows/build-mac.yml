@@ -1,4 +1,4 @@
-# 在 macOS runner 上打包知径（Windows 本机无法生成 .dmg）
+# 在 macOS runner 上打包知径，并发布到 GitHub Releases（方便他人下载）
 # 用法：GitHub → Actions →「Build macOS」→ Run workflow
 name: Build macOS
 
@@ -27,6 +27,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Read version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
       - name: Build DMG / ZIP (unsigned, arm64)
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -44,3 +48,24 @@ jobs:
             release/*.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: 知径 ${{ steps.ver.outputs.version }}（macOS）
+          body: |
+            ## macOS 安装包（Apple Silicon / arm64）
+
+            1. 下载 `.dmg` 打开，把「知径」拖到 Applications
+            2. 若提示无法验证开发者：右键应用 → 打开 → 仍要打开
+            3. 当前为未签名构建，仅供内测/自用分发
+
+            Windows 安装包请使用仓库 `release/` 本地产物或另行发布。
+          files: |
+            release/*.dmg
+            release/*.zip
+          fail_on_unmatched_files: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
