@@ -3,7 +3,10 @@
   "productName": "知径",
   "version": "1.1.0",
   "description": "岗位方向学习路径 · 按天打卡",
-  "author": "知径",
+  "author": {
+    "name": "知径",
+    "email": "wterenwang@users.noreply.github.com"
+  },
   "main": "electron/main.js",
   "private": true,
   "scripts": {
@@ -66,13 +69,13 @@
         {
           "target": "dmg",
           "arch": [
-            "universal"
+            "arm64"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "universal"
+            "arm64"
           ]
         }
       ],
@@ -82,7 +85,7 @@
       "gatekeeperAssess": false
     },
     "dmg": {
-      "title": "${productName} ${version}",
+      "title": "Zhijing ${version}",
       "contents": [
         {
           "x": 130,
