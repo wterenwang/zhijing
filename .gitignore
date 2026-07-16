@@ -1,0 +1,15 @@
+# 依赖与构建
+node_modules/
+release/
+dist/
+out/
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+.forge-data/

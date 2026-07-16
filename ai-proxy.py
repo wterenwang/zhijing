@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""本地静态服务 + DeepSeek / 搜索 API 代理（解决浏览器 CORS，Key 仍仅存于本机浏览器）"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+PORT = 3000
+ROOT = os.path.dirname(os.path.abspath(__file__))
+DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
+BOCHA_URL = "https://api.bochaai.com/v1/web-search"
+TAVILY_URL = "https://api.tavily.com/search"
+
+
+class ProxyHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=ROOT, **kwargs)
+
+    def end_headers(self):
+        # 本地开发：禁用浏览器缓存，避免知识库 JS/HTML 一直用旧版
+        path = self.path.split("?", 1)[0]
+        if path.endswith((".html", ".js", ".css")) or "/hub/" in path or path.startswith("/hub"):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+        super().end_headers()
+
+    def _path(self):
+        return self.path.split("?", 1)[0].rstrip("/") or "/"
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self):
+        if self._path() == "/api/deepseek/health":
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "proxy": True,
+                    "service": "deepseek",
+                    "search": True,
+                },
+            )
+            return
+        return super().do_GET()
+
+    def do_POST(self):
+        path = self._path()
+        if path == "/api/deepseek/chat":
+            self._proxy_deepseek()
+            return
+        if path == "/api/search":
+            self._proxy_search()
+            return
+        self.send_error(404, "Not Found")
+
+    def _read_json(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            return json.loads(raw.decode("utf-8")), None
+        except (json.JSONDecodeError, ValueError):
+            return None, "请求体不是合法 JSON"
+
+    def _proxy_deepseek(self):
+        payload, err = self._read_json()
+        if err:
+            self._json(400, {"error": {"message": err}})
+            return
+
+        api_key = (payload.pop("apiKey", "") or "").strip()
+        if not api_key:
+            self._json(400, {"error": {"message": "缺少 DeepSeek API Key"}})
+            return
+
+        upstream = {
+            "model": payload.get("model", "deepseek-chat"),
+            "messages": payload.get("messages", []),
+            "temperature": payload.get("temperature", 0.5),
+            "max_tokens": payload.get("max_tokens", 800),
+            "stream": False,
+        }
+
+        req = urllib.request.Request(
+            DEEPSEEK_URL,
+            data=json.dumps(upstream).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        self._forward(req)
+
+    def _proxy_search(self):
+        payload, err = self._read_json()
+        if err:
+            self._json(400, {"error": {"message": err}})
+            return
+
+        api_key = (payload.get("apiKey") or "").strip()
+        if not api_key:
+            self._json(400, {"error": {"message": "缺少搜索 API Key"}})
+            return
+
+        provider = (payload.get("provider") or "bocha").strip().lower()
+        query = (payload.get("query") or "").strip()
+        if not query:
+            self._json(400, {"error": {"message": "缺少搜索 query"}})
+            return
+
+        try:
+            count = int(payload.get("count") or 18)
+        except (TypeError, ValueError):
+            count = 18
+        count = max(1, min(count, 50))
+
+        try:
+            if provider == "tavily":
+                results = self._search_tavily(api_key, query, count)
+            else:
+                results = self._search_bocha(api_key, query, count)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            try:
+                err_obj = json.loads(body)
+            except json.JSONDecodeError:
+                err_obj = {"error": {"message": body or str(e)}}
+            msg = (
+                err_obj.get("error", {}).get("message")
+                if isinstance(err_obj.get("error"), dict)
+                else err_obj.get("message") or body or str(e)
+            )
+            self._json(e.code, {"error": {"message": f"搜索上游错误：{msg}"}})
+            return
+        except urllib.error.URLError as e:
+            self._json(502, {"error": {"message": f"无法连接搜索 API：{e.reason}"}})
+            return
+        except Exception as e:
+            self._json(500, {"error": {"message": str(e)}})
+            return
+
+        self._json(
+            200,
+            {
+                "provider": provider if provider == "tavily" else "bocha",
+                "query": query,
+                "results": results,
+            },
+        )
+
+    def _search_bocha(self, api_key, query, count):
+        body = {
+            "query": query,
+            "summary": True,
+            "freshness": "oneWeek",
+            "count": count,
+        }
+        req = urllib.request.Request(
+            BOCHA_URL,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        pages = (
+            (data.get("data") or {}).get("webPages")
+            or data.get("webPages")
+            or {}
+        )
+        values = pages.get("value") or []
+        return self._normalize_results(values)
+
+    def _search_tavily(self, api_key, query, count):
+        body = {
+            "api_key": api_key,
+            "query": query,
+            "search_depth": "basic",
+            "max_results": count,
+            "include_answer": False,
+        }
+        req = urllib.request.Request(
+            TAVILY_URL,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        values = data.get("results") or []
+        return self._normalize_results(values)
+
+    def _normalize_results(self, items):
+        out = []
+        seen = set()
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            url = (
+                item.get("url")
+                or item.get("link")
+                or item.get("displayUrl")
+                or ""
+            ).strip()
+            title = (item.get("title") or item.get("name") or url).strip()
+            snippet = (
+                item.get("snippet")
+                or item.get("summary")
+                or item.get("content")
+                or item.get("description")
+                or ""
+            ).strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            out.append(
+                {
+                    "title": title[:200],
+                    "url": url,
+                    "snippet": snippet[:500],
+                }
+            )
+        return out
+
+    def _forward(self, req):
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = resp.read()
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(data)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            try:
+                err = json.loads(body)
+            except json.JSONDecodeError:
+                err = {"error": {"message": body or str(e)}}
+            self._json(e.code, err)
+        except urllib.error.URLError as e:
+            self._json(502, {"error": {"message": f"无法连接 DeepSeek API：{e.reason}"}})
+        except Exception as e:
+            self._json(500, {"error": {"message": str(e)}})
+
+    def _json(self, code, obj):
+        self.send_response(code)
+        self._cors()
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+
+    def log_message(self, fmt, *args):
+        if not args:
+            return super().log_message(fmt, *args)
+        first = str(args[0])
+        if first.startswith("POST /api/") or first.startswith("GET /api/"):
+            return
+        super().log_message(fmt, *args)
+
+
+def main():
+    os.chdir(ROOT)
+    print()
+    print("=" * 48)
+    print("  具身智能 PM 学习工具 - AI 代理服务")
+    print("=" * 48)
+    print(f"  地址: http://localhost:{PORT}/index.html")
+    print(f"  健康检查: http://localhost:{PORT}/api/deepseek/health")
+    print("  接口: /api/deepseek/chat  /api/search")
+    print("  按 Ctrl+C 停止")
+    print("=" * 48)
+    print()
+
+    try:
+        httpd = ThreadingHTTPServer(("", PORT), ProxyHandler)
+    except OSError:
+        print(f"[错误] 端口 {PORT} 已被占用！")
+        print("请先关闭之前运行的本地服务窗口，常见情况：")
+        print("  - python -m http.server 3000")
+        print("  - npx serve -l 3000")
+        print("关闭后重新双击 启动本地服务.bat")
+        print()
+        input("按回车键退出...")
+        sys.exit(1)
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\n服务已停止。")
+
+
+if __name__ == "__main__":
+    main()
