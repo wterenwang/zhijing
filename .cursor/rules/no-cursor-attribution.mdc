@@ -1,0 +1,6 @@
+---
+description: 禁止在 git commit / PR 中加入 Cursor 署名
+alwaysApply: true
+---
+
+Never add `Co-authored-by: Cursor`, `Made-with: Cursor`, `cursoragent@cursor.com`, or any Cursor attribution trailer to commits, pull requests, or code comments.
