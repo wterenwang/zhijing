@@ -8,9 +8,9 @@
 
 专属学习路径 · 每日打卡 · 知识库与术语库 · 智能伴学全程在侧
 
-[⬇️ 立即下载](https://github.com/wterenwang/zhijing/releases) · [✨ 功能](#features) · [🚀 怎么开始](#quickstart)
+[⬇️ 立即下载](https://github.com/wterenwang/zhijing/releases/latest) · [✨ 功能](#features) · [🚀 怎么开始](#quickstart)
 
-![Version](https://img.shields.io/badge/version-1.1.0-0891b2)
+![Version](https://img.shields.io/badge/version-1.1.1-0891b2)
 ![Platform](https://img.shields.io/badge/Windows%20%7C%20macOS-111827)
 ![For](https://img.shields.io/badge/面向-想转岗%20%2F%20系统学岗位的人-0891b2)
 
@@ -48,14 +48,15 @@
 
 | | | |
 |---|---|---|
-| 🗺️ | **专属学习路径** | 告诉它你的行业和岗位，生成属于你的按天课表 |
+| 🗺️ | **专属学习路径** | 告诉它你的行业和岗位，生成属于你的按天课表（默认 30 天，可按目标调整） |
 | 📅 | **每天打卡** | 看今日任务、做练习、用自己的话复述，一步记下进度 |
-| 🤖 | **智能伴学** | 生成课表、练习点评、资讯解读，卡住时有人帮你理清 |
+| 🤖 | **智能伴学** | 填入 DeepSeek 密钥即可：生成课表、练习点评、联网资讯解读；生成中可随时停止 |
 | 📚 | **知识库** | 章节精读，把概念讲透，而不是只丢一堆链接 |
-| 🔤 | **术语库** | 岗位名词随时查，还能用闪卡巩固 |
+| 🔤 | **术语库** | 岗位名词随时查，还能用闪卡与间隔复习巩固 |
 | 🧩 | **练习 · 求职 · 资讯** | 需要时在「更多」里打开，不打扰每天的主线 |
+| 🐾 | **径径** | 多条路径时汇总今日待办；单路径时提醒练习、费曼与打卡 |
 
-展示课表仅供试用；真正要学的，是你自己那条路径。
+展示课表仅供试用；真正要学的，是你自己那条路径。智能功能可选，主学习流程不强制联网。
 
 ---
 
@@ -63,11 +64,11 @@
 
 ## 🚀 怎么开始（大约 3 分钟）
 
-1. 前往 [下载页](https://github.com/wterenwang/zhijing/releases)，选择你的系统  
-   - **Windows**：安装包 `知径-Setup-….exe`  
+1. 前往 [下载页](https://github.com/wterenwang/zhijing/releases/latest)，选择你的系统  
+   - **Windows（x64）**：`知径-Setup-….exe`（安装后从桌面 / 开始菜单打开）  
    - **Mac（Apple 芯片）**：`.dmg` 或 `.zip`
 2. 安装后打开 **「知径」**
-3. 跟着径径走完引导 → 按提示完成智能配置 → **新建路径**，开始正式学习
+3. 跟着径径走完引导 → 按提示配置 DeepSeek（可选）→ **新建路径**，开始正式学习
 
 也可以先点开「产品经理 30 天入门」体验一天长什么样，再创建自己的课表。
 
@@ -89,6 +90,18 @@
 
 ---
 
+## 🔑 智能功能（可选）
+
+在设置里填入 **DeepSeek API Key** 后即可使用：
+
+- 按行业 / 岗位 **生成专属课表**（支持中途停止）
+- 练习 **点评与参考答案**
+- **联网搜索** 后的日课资讯解读（与聊天共用同一密钥）
+
+密钥仅保存在本机，不会上传到知径服务器。
+
+---
+
 ## 💬 有问题？
 
 欢迎在 [Issues](https://github.com/wterenwang/zhijing/issues) 告诉我们卡在哪一步。
@@ -107,7 +120,7 @@ npm run dist           # Windows 安装包 → release/
 npm run dist:mac       # macOS 包（需在 Mac 或 CI）
 ```
 
-本地网页预览：双击 `启动本地服务.bat`，浏览器打开 `http://localhost:3000/index.html`（需本机 Python）。
+本地网页预览：双击 `启动本地服务.bat`，浏览器打开 `http://localhost:3000/index.html`（需本机 Python；窗口标题为 ZhiJing-AI-Proxy）。
 
 </details>
 

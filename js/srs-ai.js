@@ -14,7 +14,7 @@ const SrsAi = (() => {
 
   function getPlanDay(dayNum) {
     if (typeof ContentPack !== 'undefined' && ContentPack.getDay) return ContentPack.getDay(dayNum);
-    if (typeof LEARNING_PLAN !== 'undefined') return LEARNING_PLAN[dayNum - 1] || null;
+    if (typeof Pm30Pack !== 'undefined') return Pm30Pack.getPlan()?.[dayNum - 1] || null;
     return null;
   }
 

@@ -1,5 +1,5 @@
 /**
- * 90 天每日练习 + 自检要点（用于自评验证，无需 AI）
+ * 隐藏路径「具身智能」专用每日练习；默认 PM30 / 自定义路径走 ContentPack / buildGeneratedExercises
  * 返回格式：{ q, rubric: string[], ref?: string }
  */
 const GENERIC_RUBRICS = {
@@ -233,30 +233,67 @@ const DAY_EXERCISES_CURATED = {
 };
 
 function buildGeneratedExercises(plan) {
-  const topic = plan.topic;
-  const tasks = plan.tasks || [];
-  const items = [
-    {
-      q: `用一句话总结今天「${topic}」的核心认知`,
-      rubric: GENERIC_RUBRICS.summary,
-    },
-    {
-      q: `举 1 个真实案例说明「${topic}」在产品实践中的体现`,
-      rubric: GENERIC_RUBRICS.case,
-    },
-  ];
-  if (tasks[0]) {
-    items.push({
-      q: `反思今日任务：${tasks[0]} —— 你的结论或产出是什么？`,
-      rubric: GENERIC_RUBRICS.reflect,
-    });
-  } else {
-    items.push({
-      q: `关于「${topic}」，写下 1 个你还想深入的问题`,
-      rubric: GENERIC_RUBRICS.question,
-    });
-  }
-  return items;
+  // 与 PackGenerator.buildVariedFallbackExercises 对齐：按日变化，避免全路径同骨架
+  const day = Number(plan?.day) || 1;
+  const topic = plan?.topic || '今日主题';
+  const tasks = plan?.tasks || [];
+  const variant = ((day - 1) % 5) + 1;
+  const t0 = tasks[0] ? String(tasks[0]).slice(0, 40) : '';
+  const sets = {
+    1: [
+      { q: `闭卷：用工作语言定义「${topic}」必须包含的 2 个要素`, rubric: GENERIC_RUBRICS.summary },
+      {
+        q: t0 ? `对照任务「${t0}」，列出 3 个可检查产出点` : `为「${topic}」写 3 条可打分检查点`,
+        rubric: GENERIC_RUBRICS.reflect,
+      },
+      {
+        q: `场景：开发与业务对「${topic}」范围争执，你先问哪 2 个问题？`,
+        rubric: GENERIC_RUBRICS.case,
+      },
+    ],
+    2: [
+      { q: `口述「${topic}」与相邻概念的 1 个关键差异（30 秒）`, rubric: GENERIC_RUBRICS.summary },
+      { q: `写出「${topic}」的 1 个常见误区与纠正`, rubric: GENERIC_RUBRICS.case },
+      {
+        q: `时间只够做一半：你会砍掉「${topic}」的哪一块？一句理由`,
+        rubric: GENERIC_RUBRICS.reflect,
+      },
+    ],
+    3: [
+      { q: `默写「${topic}」适用条件 2 条 + 不适用 1 条`, rubric: GENERIC_RUBRICS.summary },
+      {
+        q: `用 3 点提纲向同事讲清今天「${topic}」要达成什么`,
+        rubric: GENERIC_RUBRICS.reflect,
+      },
+      {
+        q: `冲突：运营要扩范围、你要守边界——写 ≤40 字协商开场白`,
+        rubric: GENERIC_RUBRICS.case,
+      },
+    ],
+    4: [
+      {
+        q: `用「假如…就会…」各写一条：正确/误用「${topic}」的后果`,
+        rubric: GENERIC_RUBRICS.case,
+      },
+      { q: `设计 1 道新人判断题（含答案要点），考点是「${topic}」`, rubric: GENERIC_RUBRICS.reflect },
+      {
+        q: `今天关于「${topic}」你只带走一句可迁移原则，是哪句？为何？`,
+        rubric: GENERIC_RUBRICS.summary,
+      },
+    ],
+    5: [
+      { q: `列出「${topic}」交付物必有字段/段落 3 个`, rubric: GENERIC_RUBRICS.summary },
+      {
+        q: `评审有人说「太细先跳过」——你如何用「${topic}」理由拉回？`,
+        rubric: GENERIC_RUBRICS.case,
+      },
+      {
+        q: `写下对「${topic}」仍不确定的一点，和下周验证产出`,
+        rubric: GENERIC_RUBRICS.question,
+      },
+    ],
+  };
+  return sets[variant] || sets[1];
 }
 
 function getDailyExercises(day, plan) {

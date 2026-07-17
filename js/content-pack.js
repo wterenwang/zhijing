@@ -164,7 +164,8 @@ const ContentPack = (() => {
 
   function getGlossaryCards() {
     if (activeBuiltinId === BUILTIN_EMBODY) {
-      return typeof GLOSSARY_CARDS !== 'undefined' ? GLOSSARY_CARDS : [];
+      // 具身术语以 hub 知识库为准；勿回退到 PM30 短闪卡
+      return [];
     }
     if (activeBuiltinId === BUILTIN_DEFAULT) {
       return typeof Pm30Pack !== 'undefined' ? Pm30Pack.getGlossary() : [];
@@ -213,10 +214,10 @@ const ContentPack = (() => {
     if (activeBuiltinId === BUILTIN_DEFAULT && typeof Pm30Pack !== 'undefined') {
       return Pm30Pack.getHotConfig();
     }
-    if (activeCustom?.hot) {
+    if (activeCustom) {
       return {
-        keywords: activeCustom.hot.keywords || [],
-        systemHint: activeCustom.hot.systemHint || '',
+        keywords: activeCustom.hot?.keywords || [],
+        systemHint: activeCustom.hot?.systemHint || '',
         industry: activeCustom.meta?.industry || '',
         role: activeCustom.meta?.role || '',
       };
@@ -249,6 +250,17 @@ const ContentPack = (() => {
     return [];
   }
 
+  function isLazySearchPageResource(r) {
+    const url = String(r?.url || '');
+    const title = String(r?.title || '');
+    if (/请自选|网页搜索：|维基百科搜索：|B站搜索：/i.test(title)) return true;
+    if (/wikipedia\.org\/wiki\/Special:Search/i.test(url)) return true;
+    if (/search\.bilibili\.com\//i.test(url)) return true;
+    if (/google\.[^/]+\/search\?/i.test(url)) return true;
+    if (/bing\.[^/]+\/search\?/i.test(url)) return true;
+    return false;
+  }
+
   function getDayResources(day) {
     const n = Number(day);
     if (activeBuiltinId === BUILTIN_EMBODY) {
@@ -272,7 +284,7 @@ const ContentPack = (() => {
             url: String(r.url || '').trim(),
             type: String(r.type || 'article'),
           }))
-          .filter((r) => r.title && r.url)
+          .filter((r) => r.title && r.url && !isLazySearchPageResource(r))
       : [];
     const hubChapters = getHubChaptersForDay(n);
     return {

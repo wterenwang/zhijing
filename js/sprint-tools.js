@@ -1,6 +1,9 @@
 /**
  * 冲刺工具：面试题、能力雷达、作品集看板、投递管理
+ * 默认回退对齐「产品经理 30 天入门」；具身智能题库仅供隐藏路径。
  */
+
+/** @deprecated 隐藏路径专用；用户可见默认勿用 */
 const INTERVIEW_QUESTIONS = [
   { id: 'i1', cat: '行业认知', days: '1-7', q: '用一句话向面试官解释什么是具身智能？它和传统机器人有什么区别？', hint: '强调物理身体、环境交互、感知-决策-执行闭环' },
   { id: 'i2', cat: '行业认知', days: '1-7', q: '具身智能产业链的上游、中游、下游分别是什么？各举2家代表公司。', hint: '上游硬件、中游模型、下游场景' },
@@ -29,6 +32,7 @@ const INTERVIEW_QUESTIONS = [
   { id: 'i25', cat: '产品思维', days: '56-70', q: '语音交互设计要注意什么？举一条你家机器人的指令例子。', hint: '模糊指令、确认机制、失败反馈' },
 ];
 
+/** @deprecated 隐藏路径专用 */
 const SKILL_DIMENSIONS = [
   { id: 'industry', label: '行业认知', desc: '产业链、头部公司、市场判断' },
   { id: 'hardware', label: '硬件基础', desc: '关节、传感器、成本结构' },
@@ -40,6 +44,7 @@ const SKILL_DIMENSIONS = [
   { id: 'interview', label: '面试表达', desc: '结构化回答、trade-off' },
 ];
 
+/** @deprecated 隐藏路径专用 */
 const PORTFOLIO_PROJECTS = [
   {
     id: 'p1',
@@ -94,15 +99,30 @@ const APP_STATUS_OPTIONS = [
   { value: 'reject', label: '已拒绝', color: '#dc2626' },
 ];
 
-/** 根据当前学习天数推荐面试题 */
+/** 根据当前学习天数推荐面试题；无课包时回退 PM30，勿用隐藏具身题库 */
 function getActiveInterview() {
-  return typeof ContentPack !== 'undefined' ? ContentPack.getInterview() : INTERVIEW_QUESTIONS;
+  if (typeof ContentPack !== 'undefined') {
+    const list = ContentPack.getInterview();
+    if (list?.length) return list;
+  }
+  if (typeof Pm30Pack !== 'undefined') return Pm30Pack.getInterview();
+  return [];
 }
 function getActiveSkills() {
-  return typeof ContentPack !== 'undefined' ? ContentPack.getSkills() : SKILL_DIMENSIONS;
+  if (typeof ContentPack !== 'undefined') {
+    const list = ContentPack.getSkills();
+    if (list?.length) return list;
+  }
+  if (typeof Pm30Pack !== 'undefined') return Pm30Pack.getSkills();
+  return [];
 }
 function getActivePortfolio() {
-  return typeof ContentPack !== 'undefined' ? ContentPack.getPortfolio() : PORTFOLIO_PROJECTS;
+  if (typeof ContentPack !== 'undefined') {
+    const list = ContentPack.getPortfolio();
+    if (list?.length) return list;
+  }
+  if (typeof Pm30Pack !== 'undefined') return Pm30Pack.getPortfolio();
+  return [];
 }
 
 function getQuestionsForDay(day) {

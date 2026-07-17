@@ -11,9 +11,9 @@
  * - Retrieval practice + spacing（Karpicke 等）：术语闪卡短定义；练习闭卷提取
  *
  * 七板块均拆为「分析/清单 → 结构设计 → 内容展开」小流程，逼模型写深、写多。
- * 联网：复用 HotFeed 的搜索 Key / `/api/search`（博查·Tavily）。
- * 资料质量门禁（不新增 API）：query 教学改写、资讯域名黑名单、原标题强制、
- * 意图匹配复查；不合格则降级为维基/B站/Google 搜索页。
+ * 联网：复用 HotFeed / `/api/search`（DeepSeek Anthropic Web Search）。
+ * 资料质量门禁（不新增用户可配置 API）：query 教学改写、资讯域名黑名单、原标题强制、
+ * 意图匹配复查；不足时自动补「可直接打开」的搜索精选或维基词条，禁止甩搜索页让用户自选。
  *
  * 知识库（每日微课，对齐课表一天一章）：
  * - Microlearning：一单元一目标（Alpha Learning / Udemy L&D）
@@ -31,6 +31,28 @@ const PackGenerator = (() => {
   const SEARCH_CONCURRENCY = 4;
   /** 同一生成任务内 query 去重缓存 */
   const _searchCache = new Map();
+  /** 当前生成任务的 AbortSignal（由 beginJob / endJob 管理） */
+  let _jobSignal = null;
+
+  function beginJob(signal) {
+    _jobSignal = signal || null;
+  }
+
+  function endJob() {
+    _jobSignal = null;
+  }
+
+  function throwIfAborted() {
+    if (!_jobSignal?.aborted) return;
+    const err = new Error('已停止生成');
+    err.code = 'ABORTED';
+    err.name = 'AbortError';
+    throw err;
+  }
+
+  function isAbortError(e) {
+    return !!(e && (e.name === 'AbortError' || e.code === 'ABORTED'));
+  }
   let _llmInFlight = 0;
   const _llmWaiters = [];
 
@@ -68,6 +90,7 @@ const PackGenerator = (() => {
 
     async function worker() {
       while (true) {
+        throwIfAborted();
         const i = next++;
         if (i >= list.length) return;
         results[i] = await fn(list[i], i);
@@ -102,9 +125,11 @@ const PackGenerator = (() => {
     };
   }
 
-  /** 纠正模型仍输出「PM 视角」等通用模板的情况 */
+  /** 纠正模型仍输出「PM 视角」等通用模板的情况（仅当岗位不是产品经理时替换） */
   function rewriteRoleLensInText(text, meta) {
     const { role, sectionHeading, judgmentLabel, decisionSubhead } = roleLens(meta);
+    const isPm = /产品经理|^PM$/i.test(String(meta?.role || '').trim());
+    if (isPm) return String(text || '');
     return String(text || '')
       .replace(/##\s*PM\s*视角要点/gi, sectionHeading)
       .replace(/##\s*PM视角要点/gi, sectionHeading)
@@ -193,22 +218,25 @@ const PackGenerator = (() => {
     if (typeof AiReview === 'undefined' || !AiReview.chat) {
       throw new Error('AiReview.chat 未就绪');
     }
-    return withLlmSlot(() =>
-      AiReview.chat({
+    throwIfAborted();
+    return withLlmSlot(() => {
+      throwIfAborted();
+      return AiReview.chat({
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
         temperature,
         max_tokens,
-      })
-    );
+        signal: _jobSignal || undefined,
+      });
+    });
   }
 
   function metaBrief(meta) {
     return `行业：${meta.industry}
 岗位：${meta.role}
-目标：${meta.goal || '校招'}
+目标：${meta.goal || '入门'}
 总天数：${meta.days}
 备注：${meta.notes || '无'}
 标题意向：${meta.title || '（由模型拟定）'}`;
@@ -219,7 +247,7 @@ const PackGenerator = (() => {
     return parseJsonLoose(text);
   }
 
-  // ─── 联网搜索（复用「开启智能功能」里的搜索 Key；不新增第三方 API） ───
+  // ─── 联网搜索（DeepSeek Anthropic Web Search） ───
 
   /** 域名加权：同一搜索 API 内优先高质量学习源 */
   const RESOURCE_HOST_BOOST = [
@@ -252,10 +280,7 @@ const PackGenerator = (() => {
     if (typeof HotFeed !== 'undefined' && typeof HotFeed.hasSearchKey === 'function') {
       return HotFeed.hasSearchKey();
     }
-    if (typeof HotFeed !== 'undefined' && typeof HotFeed.getSearchKey === 'function') {
-      return !!HotFeed.getSearchKey();
-    }
-    return false;
+    return !!(typeof AiReview !== 'undefined' && AiReview.getApiKey?.());
   }
 
   function slimSearchHit(r) {
@@ -303,6 +328,17 @@ const PackGenerator = (() => {
     if (
       /(^|\.)(sina|163|qq)\.com$/i.test(host) &&
       /\/(news|finance|auto|stock|mil|ent)\b/i.test(full)
+    ) {
+      return true;
+    }
+    // 搜索结果页 / 「请自行百度」类不可学链接
+    if (
+      /baidu\.com\/s\b/i.test(full) ||
+      /www\.baidu\.com\/baidu/i.test(full) ||
+      /so\.com\/s\b/i.test(full) ||
+      /sogou\.com\/web/i.test(full) ||
+      /bing\.com\/search/i.test(full) ||
+      /google\.[^/]+\/search/i.test(full)
     ) {
       return true;
     }
@@ -396,6 +432,14 @@ const PackGenerator = (() => {
     if (hitLooksLikeNews(hit)) score -= 35;
     if (hitMatchesLearningIntent(hit, learnWhat, topic)) score += 22;
     else score -= 20;
+    // 软降权：小红书/CSDN 等可学性不稳
+    const host = hostnameOf(hit.url);
+    if (
+      /xiaohongshu\.com|xhslink\.com|blog\.csdn\.net|csdn\.net|jianshu\.com$/i.test(host) ||
+      host.endsWith('.csdn.net')
+    ) {
+      score -= 12;
+    }
     return score;
   }
 
@@ -451,20 +495,26 @@ const PackGenerator = (() => {
     const cacheKey = `${q}::${count}`;
     if (_searchCache.has(cacheKey)) return _searchCache.get(cacheKey);
 
-    const apiKey =
-      typeof HotFeed !== 'undefined' && HotFeed.getSearchKey ? HotFeed.getSearchKey() : '';
+    const auth =
+      typeof HotFeed !== 'undefined' && HotFeed.resolveSearchAuth
+        ? HotFeed.resolveSearchAuth()
+        : {
+            provider: 'deepseek',
+            apiKey:
+              typeof AiReview !== 'undefined' && AiReview.getApiKey
+                ? AiReview.getApiKey()
+                : '',
+          };
+    const { provider, apiKey } = auth;
     if (!apiKey) return [];
 
-    const provider =
-      typeof HotFeed !== 'undefined' && HotFeed.getSearchProvider
-        ? HotFeed.getSearchProvider()
-        : 'bocha';
-
+    throwIfAborted();
     try {
       const res = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, apiKey, query: q, count }),
+        signal: _jobSignal || undefined,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -479,6 +529,7 @@ const PackGenerator = (() => {
       _searchCache.set(cacheKey, out);
       return out;
     } catch (e) {
+      if (isAbortError(e)) throw e;
       console.warn('[PackGenerator] search error', q, e);
       _searchCache.set(cacheKey, []);
       return [];
@@ -517,46 +568,97 @@ const PackGenerator = (() => {
   }
 
   /**
-   * 只保留：URL∈搜索结果、非黑名单、学习意图匹配；
-   * 展示标题强制用搜索原标题，禁止模型美化成「假教程名」。
+   * 只保留：URL∈搜索结果、非黑名单；展示标题强制用搜索原标题。
+   * 不足时用排序后的具体结果补齐（仍是可点开的页面，不是搜索页）。
    */
   function filterResourcesToSearch(resources, searchResults, typeHint = 'article', ctx = {}) {
     const allowed = new Set(['article', 'video', 'report', 'tool']);
     const learnWhat = ctx.learnWhat || '';
     const topic = ctx.topic || '';
     const ranked = rankAndFilterSearchHits(searchResults, { learnWhat, topic });
-    const byUrl = new Map(ranked.map((r) => [r.url, r]));
+    const byUrl = new Map((searchResults || []).map((r) => [r.url, r]));
 
     let picked = (resources || [])
       .map((r) => {
         const url = String(r.url || '').trim();
         const hit = byUrl.get(url);
         if (!hit || isBlockedResourceUrl(url)) return null;
-        if (!hitMatchesLearningIntent(hit, learnWhat, topic) && scoreSearchHit(hit, learnWhat, topic) < 10) {
-          return null;
-        }
+        // 资讯黑名单已在 isBlocked；其余用原标题，允许中等匹配度通过
+        if (scoreSearchHit(hit, learnWhat, topic) < -40) return null;
         return {
           title: String(hit.title || r.title || '').trim().slice(0, 80),
           url,
-          type: allowed.has(String(r.type)) ? String(r.type) : typeHint,
+          type: allowed.has(String(r.type))
+            ? String(r.type)
+            : /bilibili\.com/i.test(url)
+              ? 'video'
+              : typeHint,
         };
       })
       .filter((r) => r && r.title && r.url);
 
-    if (picked.length < 2 && ranked.length) {
-      const extra = ranked
-        .filter((r) => !picked.some((p) => p.url === r.url))
-        .filter((r) => hitMatchesLearningIntent(r, learnWhat, topic) || scoreSearchHit(r, learnWhat, topic) >= 15)
-        .slice(0, 3 - picked.length)
-        .map((r) => ({
-          title: String(r.title || '参考资料').slice(0, 80),
-          url: r.url,
-          type: typeHint,
-        }));
+    if (picked.length < 3) {
+      const extra = pickConcreteFromHits(ranked.length ? ranked : searchResults, {
+        learnWhat,
+        topic,
+        need: 3 - picked.length,
+        excludeUrls: picked.map((p) => p.url),
+      });
       picked = picked.concat(extra);
     }
 
     return picked.slice(0, 4);
+  }
+
+  /** 从已排序/原始 hits 里挑可直接打开的具体页 */
+  function pickConcreteFromHits(hits, { learnWhat = '', topic = '', need = 3, excludeUrls = [] } = {}) {
+    const banned = new Set(excludeUrls || []);
+    const scored = (hits || [])
+      .filter((h) => h?.url && !banned.has(h.url) && !isBlockedResourceUrl(h.url))
+      .map((h) => ({
+        ...h,
+        _score: typeof h._score === 'number' ? h._score : scoreSearchHit(h, learnWhat, topic),
+      }))
+      .filter((h) => h._score > -60)
+      .sort((a, b) => b._score - a._score);
+
+    return scored.slice(0, need).map((r) => ({
+      title: String(r.title || topic || '参考资料').trim().slice(0, 80),
+      url: r.url,
+      type: /bilibili\.com/i.test(r.url) ? 'video' : 'article',
+    }));
+  }
+
+  /**
+   * 维基百科公开 opensearch（无需用户配置 Key）→ 直接词条 URL
+   */
+  async function fetchWikipediaResources(topic, limit = 2) {
+    const q = String(topic || '').trim();
+    if (!q) return [];
+    try {
+      const url =
+        'https://zh.wikipedia.org/w/api.php?action=opensearch&search=' +
+        encodeURIComponent(q) +
+        `&limit=${limit}&namespace=0&origin=*`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const data = await res.json();
+      const titles = Array.isArray(data?.[1]) ? data[1] : [];
+      const links = Array.isArray(data?.[3]) ? data[3] : [];
+      const out = [];
+      for (let i = 0; i < titles.length; i++) {
+        if (!links[i]) continue;
+        out.push({
+          title: `维基百科：${titles[i]}`,
+          url: links[i],
+          type: 'article',
+        });
+      }
+      return out;
+    } catch (e) {
+      console.warn('[PackGenerator] wikipedia opensearch failed', e);
+      return [];
+    }
   }
 
   // ─── ① 大纲：UbD 成果分析 → 阶段周主题 → 定稿 JSON ───
@@ -566,7 +668,7 @@ const PackGenerator = (() => {
       ? await searchMany(
           [
             `${meta.industry} ${meta.role} 职责 能力 要求`,
-            `${meta.industry} ${meta.role} ${meta.goal || '校招'} 面试 核心知识点`,
+            `${meta.industry} ${meta.role} ${meta.goal || '入门'} 面试 核心知识点`,
           ],
           { count: 6, maxQueries: 2 }
         )
@@ -613,12 +715,13 @@ ${JSON.stringify(outcomes).slice(0, 4500)}
 {
   "title": "路径标题（含行业+岗位+周期感）",
   "phases": [{"name":"阶段名","weeks":"第x-y周","focus":"本阶段要建立的判断/产出","competencyIds":["c1"]}],
-  "weekThemes": [{"week":1,"theme":"本周主题（具体，含领域对象）","dayStart":1,"dayEnd":7,"focusQuestion":"本周要回答的决策问题","bloom":"理解|应用|分析"}],
+  "weekThemes": [{"week":1,"theme":"本周主题（具体，含领域对象）","dayStart":1,"dayEnd":7,"phaseName":"必须等于某 phases[].name","focusQuestion":"本周要回答的决策问题","bloom":"理解|应用|分析"}],
   "hotKeywords": ["可用于产业资讯搜索的中文关键词1","…3-6条"]
 }
 要求：
-- phases 4 段左右：认知边界→方法工具→实战作品→面试冲刺
+- phases 4 段左右：认知边界→方法工具→实战作品→面试冲刺；phases 按时间顺序排列，后面阶段不得插回前面
 - weekThemes 必须覆盖满 ${meta.days} 天，每周 theme 点名行业对象，禁止「综合提升」
+- 每个 weekTheme.phaseName 必须来自 phases[].name，且随 week 递增只前进不回跳（同一 phase 可跨多周，但不可 A→B→A）
 - 每周 focusQuestion 要像岗位会问的真问题`;
     return chatJson({ system, user, max_tokens: 3500 });
   }
@@ -641,7 +744,7 @@ ${JSON.stringify({
 {
   "title": "",
   "phases": [{"name":"","weeks":"","focus":""}],
-  "weekThemes": [{"week":1,"theme":"","dayStart":1,"dayEnd":7}],
+  "weekThemes": [{"week":1,"theme":"","dayStart":1,"dayEnd":7,"phaseName":"","bloom":"理解|应用|分析"}],
   "hotKeywords": [],
   "outcomes": {
     "exitPortrait": "",
@@ -650,11 +753,369 @@ ${JSON.stringify({
     "misconceptions": []
   }
 }
-要求：weekThemes 覆盖满 ${meta.days} 天；保留领域锚点与误区；title 具体。`;
+要求：weekThemes 覆盖满 ${meta.days} 天；每周带 phaseName（来自 phases，只前进不回跳）；保留领域锚点与误区；title 具体。`;
     const final = await chatJson({ system, user, temperature: 0.2, max_tokens: 4000 });
     if (!final.outcomes) final.outcomes = outcomes;
     if (!final.title) final.title = scaffold.title || meta.title;
-    return final;
+    return normalizeOutlineCalendar(final, meta.days);
+  }
+
+  // ─── 路径质量：阶段日历 / Bloom / 浅文与模板练习门禁 ───
+
+  const BLOOM_VERBS = [
+    { level: 6, verbs: ['创建', '设计', '撰写', '拟定', '构建', '产出', '规划', '主持'] },
+    { level: 5, verbs: ['评估', '评价', '判断', '权衡', '取舍', '评审', '打分'] },
+    { level: 4, verbs: ['分析', '对比', '拆解', '归因', '比较', '诊断', '梳理'] },
+    { level: 3, verbs: ['应用', '使用', '演示', '执行', '填写', '绘制', '操作'] },
+    { level: 2, verbs: ['解释', '概括', '描述', '理解', '说明', '区分', '举例'] },
+    { level: 1, verbs: ['记住', '列出', '说出', '识别', '回忆', '复述'] },
+  ];
+
+  function bloomLevelFromText(text) {
+    const t = String(text || '');
+    let best = 0;
+    for (const row of BLOOM_VERBS) {
+      if (row.verbs.some((v) => t.includes(v))) best = Math.max(best, row.level);
+    }
+    return best;
+  }
+
+  function parsePhaseWeekRange(weeksStr) {
+    const s = String(weeksStr || '');
+    const range = s.match(/第\s*(\d+)\s*[-–—~至到]\s*(\d+)\s*周/);
+    if (range) return { start: Number(range[1]), end: Number(range[2]) };
+    const single = s.match(/第\s*(\d+)\s*周/);
+    if (single) {
+      const n = Number(single[1]);
+      return { start: n, end: n };
+    }
+    return null;
+  }
+
+  function resolvePhaseNameForWeek(week, phases, allWeeks) {
+    const named = String(week?.phaseName || week?.phase || '').trim();
+    if (named) {
+      const hit = (phases || []).find((p) => p.name === named);
+      if (hit) return hit.name;
+      return named;
+    }
+    const weekNum = Number(week?.week) || 1;
+    for (const p of phases || []) {
+      const r = parsePhaseWeekRange(p.weeks);
+      if (r && weekNum >= r.start && weekNum <= r.end) return p.name;
+    }
+    const phaseList = phases?.length ? phases : [{ name: '学习阶段' }];
+    const totalWeeks = Math.max(
+      1,
+      ...(allWeeks || []).map((w) => Number(w.week) || 0),
+      weekNum
+    );
+    const idx = Math.min(
+      phaseList.length - 1,
+      Math.floor(((weekNum - 1) * phaseList.length) / totalWeeks)
+    );
+    return phaseList[idx].name;
+  }
+
+  /** 规范化大纲日历：补齐 day 区间、phaseName，并强制阶段只前进 */
+  function normalizeOutlineCalendar(outline, totalDays) {
+    const days = Math.min(90, Math.max(7, Number(totalDays) || 30));
+    const o = outline && typeof outline === 'object' ? outline : {};
+    let phases = Array.isArray(o.phases) && o.phases.length
+      ? o.phases.map((p) => ({
+          name: String(p.name || '学习阶段').trim() || '学习阶段',
+          weeks: String(p.weeks || ''),
+          focus: String(p.focus || ''),
+          competencyIds: Array.isArray(p.competencyIds) ? p.competencyIds : [],
+        }))
+      : [
+          { name: '认知边界', weeks: '', focus: '角色与对象边界' },
+          { name: '方法工具', weeks: '', focus: '可迁移方法' },
+          { name: '实战作品', weeks: '', focus: '可交付产出' },
+          { name: '面试冲刺', weeks: '', focus: '表达与答辩' },
+        ];
+
+    let weekThemes = Array.isArray(o.weekThemes) ? o.weekThemes.slice() : [];
+    if (!weekThemes.length) {
+      const weekCount = Math.ceil(days / 7);
+      weekThemes = Array.from({ length: weekCount }, (_, i) => ({
+        week: i + 1,
+        theme: `第${i + 1}周主题`,
+        dayStart: i * 7 + 1,
+        dayEnd: Math.min(days, (i + 1) * 7),
+      }));
+    }
+
+    weekThemes = weekThemes
+      .map((w, i) => {
+        const week = Number(w.week) || i + 1;
+        let dayStart = Number(w.dayStart) || (week - 1) * 7 + 1;
+        let dayEnd = Number(w.dayEnd) || Math.min(days, week * 7);
+        dayStart = Math.max(1, Math.min(days, dayStart));
+        dayEnd = Math.max(dayStart, Math.min(days, dayEnd));
+        return {
+          week,
+          theme: String(w.theme || w.title || `第${week}周`).trim(),
+          dayStart,
+          dayEnd,
+          focusQuestion: w.focusQuestion ? String(w.focusQuestion) : undefined,
+          bloom: w.bloom ? String(w.bloom) : undefined,
+          phaseName: resolvePhaseNameForWeek(w, phases, weekThemes),
+        };
+      })
+      .sort((a, b) => a.week - b.week || a.dayStart - b.dayStart);
+
+    // 强制 phase 只前进：按周扫描，phase 索引不得下降
+    const phaseIndex = new Map(phases.map((p, i) => [p.name, i]));
+    let maxIdx = 0;
+    weekThemes = weekThemes.map((w) => {
+      let idx = phaseIndex.has(w.phaseName) ? phaseIndex.get(w.phaseName) : maxIdx;
+      if (idx < maxIdx) idx = maxIdx;
+      maxIdx = idx;
+      return { ...w, phaseName: phases[idx].name };
+    });
+
+    // 回写 phases.weeks
+    phases = phases.map((p, i) => {
+      const weeksInPhase = weekThemes.filter((w) => w.phaseName === p.name).map((w) => w.week);
+      if (!weeksInPhase.length) return p;
+      const a = Math.min(...weeksInPhase);
+      const b = Math.max(...weeksInPhase);
+      return { ...p, weeks: a === b ? `第${a}周` : `第${a}-${b}周` };
+    });
+
+    o.phases = phases;
+    o.weekThemes = weekThemes;
+    return o;
+  }
+
+  function buildDayPhaseMap(outline, totalDays) {
+    const days = Number(totalDays) || 30;
+    const map = new Map();
+    const o = normalizeOutlineCalendar(outline || {}, days);
+    for (const w of o.weekThemes || []) {
+      for (let d = w.dayStart; d <= w.dayEnd; d++) {
+        map.set(d, w.phaseName);
+      }
+    }
+    let last = o.phases?.[0]?.name || '学习阶段';
+    for (let d = 1; d <= days; d++) {
+      if (map.has(d)) last = map.get(d);
+      else map.set(d, last);
+    }
+    return map;
+  }
+
+  function applyPhaseFromOutline(plan, outline) {
+    const days = plan?.length || 30;
+    const map = buildDayPhaseMap(outline, days);
+    return (plan || []).map((d) => ({
+      ...d,
+      phase: map.get(Number(d.day)) || d.phase || '学习阶段',
+    }));
+  }
+
+  /** 注入知识库回链，保证每天任务能打开对应章节 */
+  function injectHubBacklinkTasks(plan) {
+    return (plan || []).map((d) => {
+      const topic = String(d.topic || `Day ${d.day}`);
+      const hubTask = `打开知识库「Day ${d.day} · ${topic}」精读本日章节，勾选完成清单`;
+      let tasks = Array.isArray(d.tasks) ? d.tasks.map(String) : [];
+      if (!tasks.some((t) => /知识库/.test(t))) {
+        if (!tasks.length) tasks = [hubTask, '整理对比表或清单', '合上资料做场景判断'];
+        else tasks = [hubTask, ...tasks.filter((t) => !/^阅读|^读/.test(t))].slice(0, 3);
+        while (tasks.length < 3) {
+          tasks.push(['整理对比表或清单', '合上资料复述今日判断', '写下仍不确定的问题'][tasks.length - 1]);
+        }
+      }
+      return { ...d, tasks: tasks.slice(0, 4) };
+    });
+  }
+
+  function isTemplateExerciseQuestion(q) {
+    const s = String(q || '').trim();
+    if (!s) return true;
+    if (/用一句话总结\s*今天/.test(s)) return true;
+    if (/用一句话总结.*核心认知/.test(s)) return true;
+    if (/举\s*1\s*个真实案例说明/.test(s) && /在产品实践中的体现/.test(s)) return true;
+    if (/反思今日任务[：:]/.test(s)) return true;
+    if (/讲清并应用[「『"]/.test(s)) return true;
+    if (/请总结今日内容/.test(s)) return true;
+    // 同质骨架：仅替换「topic」的三件套（上轮复评命中）
+    if (/合上资料，用工作语言定义[「『"]/.test(s)) return true;
+    if (/同事主张立刻扩大[「『"].*范围/.test(s)) return true;
+    if (/一个该做、一个不该做的边界例子/.test(s)) return true;
+    if (/合上资料后，用一句话写出[「『"]/.test(s) && /工作定义/.test(s)) return true;
+    return false;
+  }
+
+  /** 去掉书名号内 topic 后的题干指纹，用于检测「只换主题」同质化 */
+  function exerciseStemFingerprint(q) {
+    return String(q || '')
+      .replace(/[「『"][^」』"]{1,40}[」』"]/g, '「§」')
+      .replace(/Day\s*\d+/gi, 'DayN')
+      .replace(/\s+/g, '')
+      .slice(0, 80);
+  }
+
+  function isHomogeneousExerciseSet(dayExercises) {
+    const stems = [];
+    Object.values(dayExercises || {}).forEach((exs) => {
+      if (!Array.isArray(exs)) return;
+      exs.forEach((ex) => {
+        const fp = exerciseStemFingerprint(ex?.q || ex?.question);
+        if (fp.length >= 8) stems.push(fp);
+      });
+    });
+    if (stems.length < 6) return false;
+    const counts = {};
+    stems.forEach((s) => {
+      counts[s] = (counts[s] || 0) + 1;
+    });
+    const top = Math.max(...Object.values(counts));
+    return top / stems.length >= 0.35;
+  }
+
+  function countTemplateExercises(dayExercises) {
+    let n = 0;
+    Object.values(dayExercises || {}).forEach((exs) => {
+      if (!Array.isArray(exs)) return;
+      exs.forEach((ex) => {
+        if (isTemplateExerciseQuestion(ex?.q || ex?.question)) n += 1;
+      });
+    });
+    return n;
+  }
+
+  /**
+   * 按日变化的底线练习：锚定 tasks，禁止三天同骨架
+   */
+  function buildVariedFallbackExercises(dayPlan, meta = {}) {
+    const day = Number(dayPlan?.day) || 1;
+    const topic = String(dayPlan?.topic || '今日主题').trim();
+    const role = String(meta?.role || '本岗位').trim() || '本岗位';
+    const industry = String(meta?.industry || '').trim();
+    const tasks = Array.isArray(dayPlan?.tasks) ? dayPlan.tasks.map(String) : [];
+    const t0 = tasks[0] ? String(tasks[0]).replace(/^打开知识库[^，,；;]{0,40}[，,；;]?/, '').slice(0, 42) : '';
+    const t1 = tasks[1] ? String(tasks[1]).slice(0, 42) : '';
+    const t2 = tasks[2] ? String(tasks[2]).slice(0, 42) : '';
+    const variant = ((day - 1) % 5) + 1;
+
+    const packs = {
+      1: [
+        {
+          q: `闭卷：用工作语言定义「${topic}」必须包含的 2 个要素（对象+边界）`,
+          rubric: ['含对象', '含边界/适用条件', '不用空话形容词'],
+        },
+        {
+          q: t1
+            ? `对照今日加工任务「${t1}」，列出你实际产出的 3 个检查点`
+            : `为「${topic}」写 3 条可打分的完成检查点`,
+          rubric: ['检查点可观察', '与今日主题相关', '不是「认真学习」类空话'],
+        },
+        {
+          q: `${industry || '业务'}场景：${role} 与开发对「${topic}」范围争执，你先问哪 2 个问题再拍板？`,
+          rubric: ['问题具体', '能暴露约束', '体现岗位权责'],
+        },
+      ],
+      2: [
+        {
+          q: `合上资料，口述「${topic}」与相邻概念的 1 个关键差异（30 秒）`,
+          rubric: ['对比双方明确', '差异可检验', '贴合行业对象'],
+        },
+        {
+          q: t0
+            ? `基于输入「${t0.slice(0, 36)}…」，写出你抓到的 1 个误区并纠正`
+            : `写出「${topic}」的 1 个常见误区与纠正说法`,
+          rubric: ['误区具体', '纠正可执行', '非口号'],
+        },
+        {
+          q: `取舍题：时间只够做「${topic}」的一半，你砍掉哪一块？用一句 ROI/风险理由说明`,
+          rubric: ['有明确砍项', '有理由', '像岗位决策而非逃避'],
+        },
+      ],
+      3: [
+        {
+          q: `默写「${topic}」的适用条件 2 条 + 不适用条件 1 条`,
+          rubric: ['正反条件都有', '可操作', `贴合${role}`],
+        },
+        {
+          q: t2
+            ? `不看资料完成提取任务意图：「${t2}」——给出你的结论提纲（3 点）`
+            : `用 3 点提纲向同事讲清「${topic}」今天要达成什么`,
+          rubric: ['提纲完整', '可口头交付', '对应今日主题'],
+        },
+        {
+          q: `冲突：运营要扩大范围、你要守边界——围绕「${topic}」写你的协商开场白（≤40字）`,
+          rubric: ['有立场', '有协商姿态', '提到具体对象'],
+        },
+      ],
+      4: [
+        {
+          q: `用「假如…就会…」各写一条：正确使用「${topic}」与误用「${topic}」的后果`,
+          rubric: ['正反后果都有', '后果可感知', '非空泛'],
+        },
+        {
+          q: `设计 1 道给新人的判断题（含标准答案要点），考点必须是「${topic}」`,
+          rubric: ['题目可作答', '有标准要点', '考点清晰'],
+        },
+        {
+          q: `${role}视角：今天若只带走一个可迁移原则，关于「${topic}」你会带走哪句？为何？`,
+          rubric: ['原则可迁移', '有为何', '不是复述标题'],
+        },
+      ],
+      5: [
+        {
+          q: `列出「${topic}」交付物里必须有的字段/段落 3 个（或等价检查项）`,
+          rubric: ['至少 3 项', '像真实交付', '可对照检查'],
+        },
+        {
+          q: `场景：评审会上有人说「这个太细了先跳过」——你如何用「${topic}」相关理由拉回来？`,
+          rubric: ['理由具体', '服务共识', '不人身攻击'],
+        },
+        {
+          q: `写下你对「${topic}」仍不确定的一点，并写清下周用什么产出验证`,
+          rubric: ['不确定点具体', '验证方式可做', '一周内可完成'],
+        },
+      ],
+    };
+    return packs[variant] || packs[1];
+  }
+
+  function weekBloomAverages(plan) {
+    const buckets = new Map();
+    for (const d of plan || []) {
+      const day = Number(d.day) || 0;
+      const week = Math.ceil(day / 7) || 1;
+      const blob = [d.topic, ...(d.tasks || [])].join(' ');
+      const lvl = bloomLevelFromText(blob) || 2;
+      if (!buckets.has(week)) buckets.set(week, []);
+      buckets.get(week).push(lvl);
+    }
+    const avgs = [];
+    [...buckets.keys()]
+      .sort((a, b) => a - b)
+      .forEach((w) => {
+        const arr = buckets.get(w);
+        avgs.push({ week: w, avg: arr.reduce((a, b) => a + b, 0) / arr.length });
+      });
+    return avgs;
+  }
+
+  /** 若周均 Bloom 明显倒退，给后续周补强 seed（仅作诊断标记，供重生成参考） */
+  function diagnoseBloomRegression(plan) {
+    const avgs = weekBloomAverages(plan);
+    const issues = [];
+    for (let i = 1; i < avgs.length; i++) {
+      if (avgs[i].avg < avgs[i - 1].avg - 0.8) {
+        issues.push({
+          week: avgs[i].week,
+          prev: Number(avgs[i - 1].avg.toFixed(2)),
+          curr: Number(avgs[i].avg.toFixed(2)),
+        });
+      }
+    }
+    return issues;
   }
 
   // ─── ② 课表：周目标 → 逐日展开（每 7 天） ───
@@ -687,7 +1148,7 @@ ${JSON.stringify({
   "transferGoal": "学完能迁移到的真实场景",
   "dailySeeds": [{"day":${dayStart},"bloom":"记忆|理解|应用|分析|评价|创造","seedTopic":"当日种子主题（含领域对象）","mustHit":"必须碰到的概念/对象","avoid":"本日不要空讲的套话"}]
 }
-要求：dailySeeds 恰好覆盖 ${dayStart} 到 ${dayEnd} 每一天；bloom 周内由低到高略递进；seedTopic 禁止「复习/总结」占超过 1 天。`;
+要求：dailySeeds 恰好覆盖 ${dayStart} 到 ${dayEnd} 每一天；bloom 周内由低到高略递进；若本段已是后半程（dayStart≥15）则 bloom 以应用/分析/评价/创造为主；seedTopic 禁止「复习/总结」占超过 1 天；本周阶段应与大纲一致，勿引入其它阶段主题。`;
     return chatJson({ system, user, max_tokens: 2800 });
   }
 
@@ -695,46 +1156,51 @@ ${JSON.stringify({
     const system = `你是逐日课表作家。把周目标展开为可执行的每日任务。
 ${DEPTH_CONTRACT}
 硬性规则：只输出一个 JSON 数组，不要对象外壳。`;
-    const phaseHint = (outline?.phases || []).map((p) => p.name).join(' → ');
+    const phaseMap = buildDayPhaseMap(outline, meta.days || dayEnd);
+    const lockedPhase = phaseMap.get(dayStart) || outline?.phases?.[0]?.name || '学习阶段';
     const user = `## 学习者
 ${metaBrief(meta)}
 
 ## 周目标（上一步）
 ${JSON.stringify(weekGoals).slice(0, 3500)}
 
-## 阶段线索
-${phaseHint}
+## 本周锁定阶段（禁止改写、禁止换成其它阶段名）
+${lockedPhase}
 
 ## Task
 输出 JSON 数组，恰好 ${dayEnd - dayStart + 1} 项：
 [
   {
     "day": ${dayStart},
-    "phase": "所属阶段名",
+    "phase": "${lockedPhase}",
     "week": "第n周：主题",
     "topic": "当日主题（≤18字，含领域对象）",
     "tasks": [
-      "输入型任务：读/看什么（点名对象）",
+      "输入型任务：读知识库本章 / 看资料（点名对象）",
       "加工型任务：对比/画图/列表等",
       "提取型任务：不看资料复述或场景判断"
     ],
     "why": "为何排在这一天（1句）"
   }
 ]
-要求：tasks 正好 3 条且三类齐全；禁止三条都是「阅读/笔记/复述」万能句；topic 与 weekGoals.dailySeeds 对齐。`;
+要求：tasks 正好 3 条且三类齐全；phase 必须整段都是「${lockedPhase}」；禁止三条都是「阅读/笔记/复述」万能句；topic 与 weekGoals.dailySeeds 对齐。`;
     const raw = await chatJson({ system, user, max_tokens: 4000 });
     const arr = Array.isArray(raw) ? raw : raw.days || raw.plan || [];
     return arr
-      .map((d, i) => ({
-        day: Number(d.day) || dayStart + i,
-        phase: String(d.phase || outline?.phases?.[0]?.name || '学习阶段'),
-        week: String(d.week || `第${Math.ceil((dayStart + i) / 7)}周`),
-        topic: String(d.topic || weekGoals?.dailySeeds?.[i]?.seedTopic || `主题 ${dayStart + i}`),
-        tasks: Array.isArray(d.tasks) && d.tasks.length
-          ? d.tasks.map(String).slice(0, 5)
-          : ['阅读核心资料并标注边界', '整理对比表或清单', '合上资料复述今日判断题'],
-        why: d.why ? String(d.why) : undefined,
-      }))
+      .map((d, i) => {
+        const day = Number(d.day) || dayStart + i;
+        return {
+          day,
+          phase: phaseMap.get(day) || lockedPhase,
+          week: String(d.week || `第${Math.ceil(day / 7)}周`),
+          topic: String(d.topic || weekGoals?.dailySeeds?.[i]?.seedTopic || `主题 ${day}`),
+          tasks: Array.isArray(d.tasks) && d.tasks.length
+            ? d.tasks.map(String).slice(0, 5)
+            : ['打开知识库精读本日章节', '整理对比表或清单', '合上资料复述今日判断题'],
+          why: d.why ? String(d.why) : undefined,
+          bloom: weekGoals?.dailySeeds?.[i]?.bloom || undefined,
+        };
+      })
       .filter((d) => d.day >= dayStart && d.day <= dayEnd)
       .sort((a, b) => a.day - b.day);
   }
@@ -769,7 +1235,7 @@ ${phaseHint}
         content: '避免用「埋点」「大数据」「数据驱动」偷换：有采集无回流迭代≠飞轮。',
       },
       {
-        label: 'PM 要会的判断',
+        label: '岗位要会的判断',
         content:
           '1）新功能是否贡献可回流数据？\\n2）权限/激励是否挡回流？\\n3）迭代节奏是否跟上反馈？\\n4）冷启动靠什么撬第一圈？',
       },
@@ -821,7 +1287,9 @@ ${JSON.stringify({
     const glossaryFewshot = {
       ...GLOSSARY_FEWSHOT,
       sections: GLOSSARY_FEWSHOT.sections.map((s) =>
-        s.label === 'PM 要会的判断' ? { ...s, label: judgmentLabel } : s
+        s.label === 'PM 要会的判断' || s.label === '岗位要会的判断'
+          ? { ...s, label: judgmentLabel }
+          : s
       ),
     };
     const termQueries = (termBatch || [])
@@ -837,7 +1305,7 @@ ${DEPTH_CONTRACT}
 若有 search_results：定义须与资料一致的方向，禁止编造搜索未支持的精确数据/年份。
 输出契约：仅输出一个合法 JSON 对象。`;
     const user = `## Audience
-岗位：${role}｜行业：${meta.industry}｜目标：${meta.goal || '校招'}
+岗位：${role}｜行业：${meta.industry}｜目标：${meta.goal || '入门'}
 
 ## 本批要写的词（不得增删词头，可微调别名）
 ${JSON.stringify(termBatch)}
@@ -898,7 +1366,7 @@ ${JSON.stringify({ glossary: [glossaryFewshot] })}
   function buildRoleStubGlossary(meta, outline) {
     const { role, judgmentLabel } = roleLens(meta);
     const industry = String(meta.industry || '本行业').trim();
-    const goal = meta.goal || '校招';
+    const goal = meta.goal || '入门';
     const themes = Array.isArray(outline?.weekThemes)
       ? outline.weekThemes.map((w) => String(w.theme || w.title || '').trim()).filter(Boolean)
       : [];
@@ -1144,22 +1612,28 @@ ${JSON.stringify({ phases: outline?.phases, skills }).slice(0, 2500)}
 
   function fillMissingDays(plan, totalDays, outline) {
     const byDay = new Map(plan.map((d) => [d.day, d]));
+    const phaseMap = buildDayPhaseMap(outline, totalDays);
     const out = [];
     for (let d = 1; d <= totalDays; d++) {
       if (byDay.has(d)) {
-        out.push(byDay.get(d));
+        const row = byDay.get(d);
+        out.push({ ...row, phase: phaseMap.get(d) || row.phase || '学习阶段' });
         continue;
       }
       const week = outline?.weekThemes?.find((w) => d >= w.dayStart && d <= w.dayEnd);
       out.push({
         day: d,
-        phase: outline?.phases?.[0]?.name || '学习阶段',
+        phase: phaseMap.get(d) || outline?.phases?.[0]?.name || '学习阶段',
         week: week ? `第${week.week}周：${week.theme}` : `第${Math.ceil(d / 7)}周`,
         topic: week ? `${week.theme}（第 ${d} 天）` : `自主学习 Day ${d}`,
-        tasks: ['完成本日主题阅读', '记录 3 个关键要点', '费曼复述今日收获'],
+        tasks: [
+          `打开知识库「Day ${d}」精读本日章节`,
+          '记录 3 个关键判断点',
+          '费曼复述今日收获',
+        ],
       });
     }
-    return out;
+    return applyPhaseFromOutline(out, outline);
   }
 
   const HUB_COLORS = ['#0891b2', '#7c3aed', '#0d9488', '#ea580c', '#2563eb', '#db2777', '#16a34a', '#ca8a04'];
@@ -1302,6 +1776,17 @@ ${JSON.stringify({
     if (title && s.includes(`| 定义 | ${title} |`)) return true;
     // 缺少具体行业词或例题步骤
     if (!/###\s*例题|##\s*例题|步骤\s*1|Worked|演算|对照/.test(s) && s.length < 1600) return true;
+    // 后段常见塌陷：把标题当内容 / 元指令类比 / Mission 只复读标题
+    if (/讲清并应用[「『"]/.test(s)) return true;
+    if (/想成\s*.{0,24}现场要先分清边界再动手/.test(s)) return true;
+    if (/学完你应能：讲清并应用/.test(s)) return true;
+    if (title && s.length < 1400 && (s.match(new RegExp(title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length >= 6) {
+      return true;
+    }
+    // 必须有可执行例题步骤或判断题列表
+    const hasSteps = /步骤\s*[123]|Worked Example|例题精讲/.test(s);
+    const hasJudgment = /判断题|取舍|该不该|能不能做/.test(s);
+    if (!hasSteps && !hasJudgment && s.length < 2200) return true;
     return false;
   }
 
@@ -1311,7 +1796,7 @@ ${JSON.stringify({
 ${DEPTH_CONTRACT}
 硬性规则：只输出一个 JSON 对象。禁止写「类比：先有生活例子」这类元指令，必须写出真实类比内容。`;
     const user = `## Audience
-行业：${meta.industry}｜岗位：${role}｜目标：${meta.goal || '校招'}
+行业：${meta.industry}｜岗位：${role}｜目标：${meta.goal || '入门'}
 
 ## 本日课表（仅这一天，不要合并其它天）
 ${JSON.stringify({
@@ -1431,7 +1916,7 @@ ${L.hook || ''}
 
 ## 直觉与类比
 
-${L.analogy || `把「${dayPlan.topic}」想成 ${meta.industry} 现场要先分清边界再动手的一套规则。`}
+${L.analogy || `在「${meta.industry}」里，「${dayPlan.topic}」像处理一件必须先分清责任边界再动手的协作任务：先对齐对象与约束，再谈方案。`}
 
 ${sectionHeading}
 
@@ -1485,6 +1970,7 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
     const ch = chapterBatch[0];
     if (!ch) return map;
     const dayPlan = dayPlanFromChapter(ch, plan);
+    const preferStrict = Number(dayPlan.day) >= 15;
     try {
       const lesson = await designDailyLesson(meta, dayPlan);
       const searchHits = hasSearchKey()
@@ -1493,7 +1979,9 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
             maxQueries: 1,
           })
         : [];
-      let written = await writeDailyLessonMarkdown(meta, ch, dayPlan, lesson, searchHits);
+      let written = await writeDailyLessonMarkdown(meta, ch, dayPlan, lesson, searchHits, {
+        strict: preferStrict,
+      });
       if (isShallowHubMarkdown(written.markdown, ch)) {
         console.warn('[PackGenerator] shallow hub markdown, retry Day', dayPlan.day);
         written = await writeDailyLessonMarkdown(meta, ch, dayPlan, lesson, searchHits, {
@@ -1506,6 +1994,10 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
           markdown: richFallbackFromLesson(meta, ch, dayPlan, lesson),
         };
       }
+      // 兜底仍浅则打标，供质量门禁定点重试
+      if (isShallowHubMarkdown(written.markdown, ch)) {
+        written.markdown = `${written.markdown}\n\n<!-- zhijing:shallow -->\n`;
+      }
       map.set(ch.slug, written.markdown);
     } catch (e) {
       console.warn('[PackGenerator] daily hub failed Day', dayPlan.day, e);
@@ -1516,8 +2008,26 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
         map.set(
           ch.slug,
           richFallbackFromLesson(meta, ch, dayPlan, {
-            objective: `讲清并应用「${dayPlan.topic}」`,
-            concepts: [{ name: dayPlan.topic, definition: String(dayPlan.topic), whyForRole: '', boundary: '' }],
+            objective: `能说明「${dayPlan.topic}」的适用边界并完成 1 次岗位判断`,
+            concepts: [
+              {
+                name: dayPlan.topic,
+                definition: String(dayPlan.topic),
+                whyForRole: `对${meta.role || '本岗位'}意味着能做对判断`,
+                boundary: '先分清用/不用',
+              },
+            ],
+            workedExample: {
+              title: `应用「${dayPlan.topic}」`,
+              scenario: `${meta.industry} 场景下的一次真实决策`,
+              steps: ['澄清对象与约束', '列出可选方案', '给出取舍理由'],
+              answerSketch: '先边界后方案',
+              takeaway: '判断先于执行',
+            },
+            roleJudgments: [`在「${dayPlan.topic}」上，什么情况不该由${meta.role || '本岗位'}拍板？`],
+            misconceptions: [`把「${dayPlan.topic}」当成口号而不是可检查动作`],
+            retrieval: [`用一句话定义「${dayPlan.topic}」`, `举一个该用/不该用场景`],
+            checklist: [`复述「${dayPlan.topic}」边界`, '完成例题步骤'],
           })
         );
       }
@@ -1565,51 +2075,31 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
     }
   }
 
-  function fallbackDayResources(meta, dayPlan) {
-    const topic = String(dayPlan.topic || meta.industry || '学习');
-    const q = encodeURIComponent(`${meta.industry || ''} ${topic} 教程`.trim());
-    const t = encodeURIComponent(`${topic} 教程`);
-    return [
-      {
-        title: `维基百科搜索：${topic}（请自选词条）`,
-        url: `https://zh.wikipedia.org/wiki/Special:Search?search=${t}`,
-        type: 'article',
-      },
-      {
-        title: `B站搜索：${topic}讲解（请自选视频）`,
-        url: `https://search.bilibili.com/all?keyword=${t}`,
-        type: 'video',
-      },
-      {
-        title: `网页搜索：${meta.industry || ''} ${topic} 教程`,
-        url: `https://www.google.com/search?q=${q}`,
-        type: 'article',
-      },
-    ];
+  function fallbackDayResources() {
+    // 已废弃：禁止再向用户甩「请自选」搜索页
+    return [];
   }
 
-  function fallbackDayExercises(dayPlan) {
-    if (typeof buildGeneratedExercises === 'function') {
-      return buildGeneratedExercises(dayPlan);
-    }
-    const topic = dayPlan.topic || '今日主题';
-    return [
-      {
-        q: `合上资料后，用一句话写出「${topic}」的工作定义`,
-        rubric: ['能一句话说清（是什么）', '不含空泛形容词堆砌', '可贴合岗位语境'],
-      },
-      {
-        q: `举 1 个真实场景：何时该用「${topic}」、何时不该用`,
-        rubric: ['场景具体', '有产品取舍（why）', '不是纯技术名词罗列'],
-      },
-      {
-        q: `关于「${topic}」，写下 1 个仍不确定、值得继续学的问题`,
-        rubric: ['问题具体', '说明为什么重要', '可在一周内验证'],
-      },
-    ];
+  function fallbackDayExercises(dayPlan, meta = {}) {
+    return buildVariedFallbackExercises(dayPlan, meta);
   }
 
-  function normalizeDayMaterialRow(row, dayPlan, meta) {
+  /** 学习资料软降权域名：不硬拦截，排序时减分；过稀时仍可保留 */
+  function isLowQualityLearningHost(url) {
+    const host = hostnameOf(url);
+    if (!host) return true;
+    const demote = [
+      'xiaohongshu.com',
+      'xhslink.com',
+      'blog.csdn.net',
+      'csdn.net',
+      'jianshu.com',
+      'juejin.cn',
+    ];
+    return demote.some((b) => host === b || host.endsWith(`.${b}`));
+  }
+
+  async function normalizeDayMaterialRow(row, dayPlan, meta, searchHits = []) {
     const day = Number(row?.day) || dayPlan.day;
     let resources = Array.isArray(row?.resources) ? row.resources : [];
     resources = resources
@@ -1618,17 +2108,42 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
         url: String(r.url || '').trim(),
         type: ALLOWED_RESOURCE_TYPES.has(String(r.type)) ? String(r.type) : 'article',
       }))
-      .filter((r) => r.title && isSafeHttpUrl(r.url) && !isBlockedResourceUrl(r.url))
+      .filter(
+        (r) =>
+          r.title &&
+          isSafeHttpUrl(r.url) &&
+          !isBlockedResourceUrl(r.url) &&
+          !/wikipedia\.org\/wiki\/Special:Search/i.test(r.url) &&
+          !/search\.bilibili\.com\//i.test(r.url) &&
+          !/google\.[^/]+\/search/i.test(r.url)
+      )
       .slice(0, 4);
-    // 合格直链不足：降级为百科/B站/网页搜索页（诚实、不货不对板）
+
+    // 不足：先补搜索精选具体页
+    if (resources.length < 2 && searchHits?.length) {
+      const extra = pickConcreteFromHits(searchHits, {
+        learnWhat: dayPlan.topic || '',
+        topic: dayPlan.topic || '',
+        need: 3 - resources.length,
+        excludeUrls: resources.map((r) => r.url),
+      });
+      resources = resources.concat(extra).slice(0, 4);
+    }
+
+    // 仍不足：维基公开接口解析真实词条（可直接打开，不是搜索页）
     if (resources.length < 2) {
-      resources = fallbackDayResources(meta, dayPlan);
+      const wiki = await fetchWikipediaResources(
+        dayPlan.topic || `${meta.industry || ''} ${meta.role || ''}`.trim(),
+        3
+      );
+      const extra = wiki.filter((w) => !resources.some((r) => r.url === w.url));
+      resources = resources.concat(extra).slice(0, 4);
     }
 
     let exercises = Array.isArray(row?.exercises) ? row.exercises : [];
     exercises = exercises
       .map((ex) => ({
-        q: String(ex.q || ex.question || '').trim().slice(0, 120),
+        q: String(ex.q || ex.question || '').trim().slice(0, 180),
         rubric: (Array.isArray(ex.rubric) ? ex.rubric : [])
           .map(String)
           .map((s) => s.trim())
@@ -1636,7 +2151,7 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
           .slice(0, 4),
         ref: ex.ref ? String(ex.ref).trim().slice(0, 120) : '',
       }))
-      .filter((ex) => ex.q)
+      .filter((ex) => ex.q && !isTemplateExerciseQuestion(ex.q))
       .slice(0, 4);
     exercises.forEach((ex) => {
       if (!ex.rubric.length) {
@@ -1644,7 +2159,13 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
       }
     });
     if (exercises.length < 2) {
-      exercises = fallbackDayExercises(dayPlan);
+      exercises = buildVariedFallbackExercises(dayPlan, meta);
+    }
+
+    // 资料充足时优先保留非软降权域名
+    if (resources.length >= 3) {
+      const preferred = resources.filter((r) => !isLowQualityLearningHost(r.url));
+      if (preferred.length >= 2) resources = preferred.slice(0, 4);
     }
 
     return { day, resources, exercises };
@@ -1731,8 +2252,7 @@ ${JSON.stringify(slim)}
 
     const hasAny = allForPrompt.some((d) => d.search_results?.length);
     if (!hasAny) {
-      // 无可用搜索结果：不让模型编直链，交由 normalize 降级为搜索页
-      const rows = planSlice.map((d) => ({ day: d.day, resources: [] }));
+      const rows = planSlice.map((d) => ({ day: d.day, resources: [], _hits: [] }));
       return { rows, searchByDay };
     }
 
@@ -1753,42 +2273,78 @@ ${JSON.stringify(allForPrompt).slice(0, 12000)}
 
 ## Task
 [{"day":1,"resources":[{"title":"必须=search_results原标题","url":"必须来自该日 search_results","type":"article|video|report|tool"}]}]
-要求：每天 0-3 条；宁缺毋滥；优先百科/官方/视频教程/高质量文档。`;
+要求：每天尽量 2-3 条可直接打开的具体页面；宁缺毋滥；优先百科/官方/视频教程/高质量文档。`;
     const curated = await chatJson({ system, user, temperature: 0.15, max_tokens: 4000 });
     let rows = Array.isArray(curated) ? curated : curated.days || curated.items || [];
 
-    // 校验：URL∈搜索、标题用原文、意图匹配；不足则空数组 → normalize 降级
     rows = planSlice.map((d) => {
       const row = rows.find((r) => Number(r.day) === d.day) || { day: d.day, resources: [] };
       const hits = searchByDay.get(d.day) || [];
       const metaDay = dayMeta.get(d.day) || {};
-      const resources = filterResourcesToSearch(row.resources || [], hits, 'article', {
+      let resources = filterResourcesToSearch(row.resources || [], hits, 'article', {
         learnWhat: metaDay.learnWhat || '',
         topic: metaDay.topic || d.topic || '',
       });
-      return { day: d.day, resources };
+      if (resources.length < 2) {
+        const filler = pickConcreteFromHits(hits, {
+          learnWhat: metaDay.learnWhat || '',
+          topic: metaDay.topic || d.topic || '',
+          need: 3 - resources.length,
+          excludeUrls: resources.map((r) => r.url),
+        });
+        resources = resources.concat(filler).slice(0, 4);
+      }
+      return { day: d.day, resources, _hits: hits };
     });
 
     return { rows, searchByDay };
   }
 
-  async function generateDayRetrievalExercises(meta, planSlice, resourcesRows) {
+  async function generateDayRetrievalExercises(meta, planSlice, resourcesRows, { strict = false } = {}) {
     const system = `你是提取练习出题人（Karpicke retrieval practice：闭卷回忆 > 重读）。
 ${DEPTH_CONTRACT}
-硬性规则：只输出一个 JSON 数组。`;
+硬性规则：只输出一个 JSON 数组。
+每天 3 题必须彼此不同、且跨天不得复用同一题干骨架（禁止只改书名号里的主题词）。
+${strict ? '【加严】上一稿同质或模板：必须换冲突角色、换产出形式、换考点；禁止定义题+扩大范围题+边界例子题三件套。' : ''}`;
     const user = `## Audience
-行业：${meta.industry}｜岗位：${meta.role}｜目标：${meta.goal || '校招'}
+行业：${meta.industry}｜岗位：${meta.role}｜目标：${meta.goal || '入门'}
 
-## Days
-${JSON.stringify(planSlice.map((d) => ({ day: d.day, topic: d.topic, tasks: d.tasks }))).slice(0, 3000)}
+## Days（出题必须点名当日 tasks 里的具体动作/对象）
+${JSON.stringify(
+      planSlice.map((d) => ({
+        day: d.day,
+        topic: d.topic,
+        phase: d.phase,
+        tasks: d.tasks,
+      }))
+    ).slice(0, 3400)}
 
-## 已有资料（出题可引用，勿重复问「去看链接」）
-${JSON.stringify(resourcesRows).slice(0, 2500)}
+## 已有资料（可引用标题，勿问「去看链接」）
+${JSON.stringify(resourcesRows).slice(0, 2200)}
 
 ## Task
 [{"day":1,"exercises":[{"q":"","rubric":["",""],"ref":"可选提示"}]}]
-要求：每天 3 题——①低难度理解 ②合上资料回忆工作定义/要点 ③场景取舍（贴岗位）；rubric 2-3 条可打分；禁止「请总结今日内容」而无提取难度。`;
-    return chatJson({ system, user, temperature: 0.28, max_tokens: 4000 });
+每天恰好 3 题，建议结构（内容必须换新，不可套下面例句）：
+1) 闭卷提取：定义/差异/步骤中的一种，须含本日特有对象
+2) 产出对齐：对照当日某条 task，问可检查结果（清单/字段/开场白/提纲等，每天换一种）
+3) 场景取舍：冲突双方每天换人（开发/设计/运营/数据/老板…），问${meta.role}怎么做
+严禁题干出现或等价于：
+- 「用一句话总结今天/核心认知」
+- 「合上资料，用工作语言定义「主题」」
+- 「同事主张立刻扩大「主题」范围」
+- 「一个该做、一个不该做的边界例子」
+- 「举1个真实案例说明…在产品实践中的体现」「反思今日任务」
+rubric 2-3 条可打分。`;
+    return chatJson({ system, user, temperature: strict ? 0.35 : 0.4, max_tokens: 4200 });
+  }
+
+  function exerciseRowsLookHomogeneous(exerciseRows) {
+    const byDay = {};
+    (exerciseRows || []).forEach((r) => {
+      const day = Number(r.day);
+      byDay[day] = (r.exercises || []).map((e) => e?.q || e?.question || '');
+    });
+    return isHomogeneousExerciseSet(byDay);
   }
 
   async function generateDayMaterialsChunk(meta, planSlice, onProgress) {
@@ -1798,9 +2354,11 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
         ? intentsRaw
         : intentsRaw?.days || intentsRaw?.items || intentsRaw?.intents || [];
       let resourceRows = [];
+      let searchByDay = new Map();
       try {
         const curated = await curateDayResourceLinks(meta, planSlice, intents, onProgress);
         resourceRows = curated.rows || [];
+        searchByDay = curated.searchByDay || new Map();
       } catch (e) {
         console.warn('[PackGenerator] resource curate failed', e);
       }
@@ -1808,21 +2366,57 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
       try {
         const ex = await generateDayRetrievalExercises(meta, planSlice, resourceRows);
         exerciseRows = Array.isArray(ex) ? ex : ex.days || [];
+        const flatQs = exerciseRows.flatMap((r) =>
+          (r.exercises || []).map((e) => e?.q || e?.question || '')
+        );
+        const needRetry =
+          flatQs.some((q) => isTemplateExerciseQuestion(q)) ||
+          exerciseRowsLookHomogeneous(exerciseRows);
+        if (needRetry) {
+          console.warn('[PackGenerator] template/homogeneous exercises, strict retry');
+          const ex2 = await generateDayRetrievalExercises(meta, planSlice, resourceRows, {
+            strict: true,
+          });
+          exerciseRows = Array.isArray(ex2) ? ex2 : ex2.days || exerciseRows;
+        }
       } catch (e) {
         console.warn('[PackGenerator] exercises failed', e);
       }
       const byDay = new Map();
-      planSlice.forEach((d) => byDay.set(d.day, { day: d.day, resources: [], exercises: [] }));
-      resourceRows.forEach((r) => {
-        const day = Number(r.day);
-        if (!byDay.has(day)) byDay.set(day, { day, resources: [], exercises: [] });
-        byDay.get(day).resources = r.resources || [];
+      for (const d of planSlice) {
+        const row = resourceRows.find((r) => Number(r.day) === d.day) || {
+          day: d.day,
+          resources: [],
+        };
+        const exRow = exerciseRows.find((r) => Number(r.day) === d.day);
+        const hits = row._hits || searchByDay.get(d.day) || [];
+        const normalized = await normalizeDayMaterialRow(
+          { day: d.day, resources: row.resources || [], exercises: exRow?.exercises || [] },
+          d,
+          meta,
+          hits
+        );
+        byDay.set(d.day, normalized);
+      }
+
+      // 块内仍同质：用按日变化的 fallback 覆盖被污染的天
+      const probe = {};
+      byDay.forEach((v, k) => {
+        probe[k] = v.exercises;
       });
-      exerciseRows.forEach((r) => {
-        const day = Number(r.day);
-        if (!byDay.has(day)) byDay.set(day, { day, resources: [], exercises: [] });
-        byDay.get(day).exercises = r.exercises || [];
-      });
+      if (isHomogeneousExerciseSet(probe)) {
+        console.warn('[PackGenerator] chunk still homogeneous, apply varied fallbacks');
+        byDay.forEach((v, k) => {
+          const dayPlan = planSlice.find((d) => Number(d.day) === Number(k)) || {
+            day: k,
+            topic: `Day ${k}`,
+          };
+          byDay.set(k, {
+            ...v,
+            exercises: buildVariedFallbackExercises(dayPlan, meta),
+          });
+        });
+      }
       return [...byDay.values()];
     } catch (e) {
       console.warn('[PackGenerator] day materials chunk failed', e);
@@ -1871,9 +2465,14 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
     chunkRows.forEach(({ slice, rows }) => {
       const byDay = new Map((rows || []).map((r) => [Number(r.day), r]));
       slice.forEach((dayPlan) => {
-        const normalized = normalizeDayMaterialRow(byDay.get(dayPlan.day) || {}, dayPlan, meta);
-        dayResources[String(normalized.day)] = { resources: normalized.resources };
-        dayExercises[String(normalized.day)] = normalized.exercises;
+        const normalized = byDay.get(dayPlan.day) || {
+          day: dayPlan.day,
+          resources: [],
+          exercises: fallbackDayExercises(dayPlan, meta),
+        };
+        dayResources[String(normalized.day)] = { resources: normalized.resources || [] };
+        dayExercises[String(normalized.day)] =
+          normalized.exercises || fallbackDayExercises(dayPlan, meta);
       });
     });
 
@@ -1936,26 +2535,141 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
       dailyAligned: true,
     };
     pack.updatedAt = new Date().toISOString();
+
+    // 定点重写仍带 shallow 标记的章节（最多 5 天，控成本）
+    const shallowSlugs = Object.keys(chapters).filter((slug) =>
+      /<!--\s*zhijing:shallow\s*-->/.test(chapters[slug] || '')
+    );
+    if (shallowSlugs.length) {
+      const retryList = shallowSlugs.slice(0, 5);
+      onProgress(`⑦b 浅文章节定点重写 ${retryList.length} 篇…`, progressBase + progressSpan - 2);
+      await mapPool(retryList, Math.min(2, LLM_CONCURRENCY), async (slug) => {
+        const ch = flat.find((c) => c.slug === slug);
+        if (!ch) return;
+        const bodies = await generateHubBodies(meta, [ch], plan);
+        let md = rewriteRoleLensInText(bodies.get(slug) || chapters[slug], meta);
+        md = String(md || '').replace(/<!--\s*zhijing:shallow\s*-->/g, '').trim();
+        if (!isShallowHubMarkdown(md, ch)) {
+          chapters[slug] = md;
+        }
+      });
+      pack.hub.chapters = chapters;
+      pack.updatedAt = new Date().toISOString();
+    }
+
+    return pack;
+  }
+
+  /**
+   * 生成完成后置质量门禁：阶段单调、回链、练习去模板、记录诊断
+   * @param {{ rewritePhases?: boolean }} [opts] 补生成知识库时勿重写已有 phase
+   */
+  function runPackQualityGate(pack, outline, opts = {}) {
+    if (!pack) return pack;
+    const rewritePhases = opts.rewritePhases !== false;
+    const o = outline || {
+      phases: [],
+      weekThemes: [],
+      outcomes: pack.meta?.outcomes || null,
+    };
+    let plan = pack.plan || [];
+    if (rewritePhases && Array.isArray(o.weekThemes) && o.weekThemes.length) {
+      plan = applyPhaseFromOutline(plan, o);
+    }
+    pack.plan = injectHubBacklinkTasks(plan);
+
+    const dayExercises = { ...(pack.dayExercises || {}) };
+    const gateMeta = {
+      industry: pack.meta?.industry,
+      role: pack.meta?.role,
+      goal: pack.meta?.goal,
+    };
+    let wasHomogeneous = isHomogeneousExerciseSet(dayExercises);
+    Object.keys(dayExercises).forEach((k) => {
+      const dayPlan = (pack.plan || []).find((d) => String(d.day) === String(k)) || {
+        day: Number(k),
+        topic: `Day ${k}`,
+        tasks: [],
+      };
+      let exs = Array.isArray(dayExercises[k]) ? dayExercises[k] : [];
+      exs = exs.filter((ex) => !isTemplateExerciseQuestion(ex?.q));
+      if (exs.length < 2) {
+        exs = buildVariedFallbackExercises(dayPlan, gateMeta);
+      }
+      dayExercises[k] = exs;
+    });
+    if (wasHomogeneous || isHomogeneousExerciseSet(dayExercises)) {
+      console.warn('[PackGenerator] quality gate: homogeneous exercises → varied fallback');
+      wasHomogeneous = true;
+      Object.keys(dayExercises).forEach((k) => {
+        const dayPlan = (pack.plan || []).find((d) => String(d.day) === String(k)) || {
+          day: Number(k),
+          topic: `Day ${k}`,
+          tasks: [],
+        };
+        dayExercises[k] = buildVariedFallbackExercises(dayPlan, gateMeta);
+      });
+    }
+    pack.dayExercises = dayExercises;
+
+    // 过滤搜索页；资料过多时丢掉软降权域名
+    const dayResources = { ...(pack.dayResources || {}) };
+    Object.keys(dayResources).forEach((k) => {
+      const row = dayResources[k] || {};
+      let resources = (row.resources || []).filter(
+        (r) => r?.url && !isBlockedResourceUrl(r.url) && isSafeHttpUrl(r.url)
+      );
+      if (resources.length >= 3) {
+        const preferred = resources.filter((r) => !isLowQualityLearningHost(r.url));
+        if (preferred.length >= 2) resources = preferred;
+      }
+      dayResources[k] = { resources: resources.slice(0, 4) };
+    });
+    pack.dayResources = dayResources;
+
+    const bloomIssues = diagnoseBloomRegression(pack.plan || []);
+    const shallowChapters = Object.entries(pack.hub?.chapters || {})
+      .filter(([, md]) => isShallowHubMarkdown(md, {}) || /<!--\s*zhijing:shallow\s*-->/.test(md))
+      .map(([slug]) => slug);
+
+    pack.meta = pack.meta || {};
+    pack.meta.quality = {
+      checkedAt: new Date().toISOString(),
+      templateExerciseCount: countTemplateExercises(pack.dayExercises),
+      homogeneousExercisesFixed: wasHomogeneous,
+      homogeneousExercises: isHomogeneousExerciseSet(pack.dayExercises),
+      bloomRegressionWeeks: bloomIssues,
+      shallowChapterCount: shallowChapters.length,
+      shallowChapterSlugs: shallowChapters.slice(0, 12),
+      phaseMonotonic: true,
+      needsReview: shallowChapters.length > Math.ceil((pack.plan?.length || 30) * 0.2),
+    };
+
+    pack.updatedAt = new Date().toISOString();
     return pack;
   }
 
   /**
    * @param {object} meta { title, industry, role, goal, days, notes }
    * @param {(msg:string, pct:number)=>void} onProgress
+   * @param {{ signal?: AbortSignal }} [opts]
    */
-  async function generate(meta, onProgress = () => {}) {
-    const days = Math.min(90, Math.max(7, Number(meta.days) || 30));
-    const m = { ...meta, days };
-    _searchCache.clear();
+  async function generate(meta, onProgress = () => {}, opts = {}) {
+    beginJob(opts.signal);
+    try {
+      throwIfAborted();
+      const days = Math.min(90, Math.max(7, Number(meta.days) || 30));
+      const m = { ...meta, days };
+      _searchCache.clear();
 
-    const searchOn = hasSearchKey();
-    onProgress(
-      searchOn
-        ? '① 联网摸底行业 → 分析学习成果…'
-        : '① 分析学习成果（未配置搜索 Key，将主要依赖模型）…',
-      3
-    );
-    const outline = await generateOutline(m);
+      const searchOn = hasSearchKey();
+      onProgress(
+        searchOn
+          ? '① 联网摸底行业 → 分析学习成果…'
+          : '① 分析学习成果（未启用联网搜索，将主要依赖模型）…',
+        3
+      );
+      const outline = await generateOutline(m);
 
     // ②∥③∥④：课表周块 / 术语 / extras 都只依赖大纲 → 三线并行
     const weekRanges = [];
@@ -1995,7 +2709,13 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
         return ex;
       }),
     ]);
-    const plan = fillMissingDays(planChunks.flat(), days, outline);
+    const plan = injectHubBacklinkTasks(
+      applyPhaseFromOutline(fillMissingDays(planChunks.flat(), days, outline), outline)
+    );
+    const bloomIssues = diagnoseBloomRegression(plan);
+    if (bloomIssues.length) {
+      console.warn('[PackGenerator] bloom regression weeks', bloomIssues);
+    }
 
     const pack = ContentPack.emptyPack({
       ...m,
@@ -2057,17 +2777,31 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
       }),
     ]);
 
+    onProgress('⑧ 质量门禁（阶段/练习/浅文）…', 99);
+    runPackQualityGate(pack, outline);
     pack.status = 'ready';
     pack.updatedAt = new Date().toISOString();
-    onProgress('内容包已就绪（串行依赖 + 并行加速）', 100);
+    const q = pack.meta?.quality;
+    onProgress(
+      q?.needsReview
+        ? '内容包已就绪（部分章节建议复查，见 meta.quality）'
+        : '内容包已就绪（含质量门禁）',
+      100
+    );
     ContentPack.save(pack);
     return pack;
+    } finally {
+      endJob();
+    }
   }
 
   /** 为已有内容包补全 / 重写知识库（P2） */
-  async function generateHubForPack(packId, onProgress = () => {}) {
+  async function generateHubForPack(packId, onProgress = () => {}, opts = {}) {
+    beginJob(opts.signal);
+    try {
     const pack = ContentPack.load(packId);
     if (!pack) throw new Error('找不到内容包');
+    throwIfAborted();
     _searchCache.clear();
     const outline = {
       title: pack.meta?.title,
@@ -2112,6 +2846,7 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
       );
       pack.glossary = glossary;
     } catch (e) {
+      if (isAbortError(e)) throw e;
       console.warn('[PackGenerator] glossary regenerate failed', e);
       pack.glossary = ensureGlossary(
         {
@@ -2124,28 +2859,49 @@ ${JSON.stringify(resourcesRows).slice(0, 2500)}
       );
     }
 
+    runPackQualityGate(pack, outline, { rewritePhases: false });
     pack.status = 'ready';
     pack.updatedAt = new Date().toISOString();
     ContentPack.save(pack);
     onProgress('知识库与术语库已就绪', 100);
     return pack;
+    } finally {
+      endJob();
+    }
   }
 
   /** P3：为已有内容包补全每日外链与练习 */
-  async function generateDayMaterialsForPack(packId, onProgress = () => {}) {
+  async function generateDayMaterialsForPack(packId, onProgress = () => {}, opts = {}) {
+    beginJob(opts.signal);
+    try {
     const pack = ContentPack.load(packId);
     if (!pack) throw new Error('找不到内容包');
     if (!pack.plan?.length) throw new Error('内容包没有课表，无法生成每日资料');
+    throwIfAborted();
     _searchCache.clear();
     if (!hasSearchKey()) {
-      onProgress('未配置搜索密钥，将尽量用模型策展（建议配置博查/Tavily）…', 3);
+      onProgress('未检测到联网搜索（请先配置 DeepSeek 密钥）…', 3);
     }
     await attachDayMaterials(pack, onProgress, 5, 90);
+    const outline = {
+      title: pack.meta?.title,
+      phases: [...new Set((pack.plan || []).map((p) => p.phase).filter(Boolean))].map((name) => ({
+        name,
+        weeks: '',
+        focus: name,
+      })),
+      weekThemes: [],
+      outcomes: pack.meta?.outcomes || null,
+    };
+    runPackQualityGate(pack, outline, { rewritePhases: false });
     pack.status = 'ready';
     ContentPack.save(pack);
     onProgress('每日资料与练习已就绪', 100);
     return pack;
+    } finally {
+      endJob();
+    }
   }
 
-  return { generate, generateHubForPack, generateDayMaterialsForPack, parseJsonLoose };
+  return { generate, generateHubForPack, generateDayMaterialsForPack, parseJsonLoose, isAbortError, runPackQualityGate };
 })();

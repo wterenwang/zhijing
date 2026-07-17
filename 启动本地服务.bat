@@ -22,8 +22,8 @@ if not defined PYEXE where python >nul 2>&1 && set "PYEXE=python"
 if not defined PYEXE goto NO_PYTHON
 
 REM start AI proxy in its own window
-echo [start] AI proxy - do NOT close the EI-AI-Proxy window
-start "EI-AI-Proxy" /D "%~dp0" cmd /k %PYEXE% ai-proxy.py
+echo [start] AI proxy - do NOT close the ZhiJing-AI-Proxy window
+start "ZhiJing-AI-Proxy" /D "%~dp0" cmd /k %PYEXE% ai-proxy.py
 
 REM health check
 echo [wait] waiting for proxy...
@@ -37,7 +37,7 @@ if %RETRY% LSS 12 goto WAIT_LOOP
 
 echo.
 echo [error] AI proxy failed to start.
-echo Check the EI-AI-Proxy window for details.
+echo Check the ZhiJing-AI-Proxy window for details.
 echo.
 pause
 exit /b 1

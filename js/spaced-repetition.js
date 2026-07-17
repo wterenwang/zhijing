@@ -271,7 +271,7 @@ const SpacedRepetition = {
     if (typeof ContentPack !== 'undefined' && ContentPack.getDay) {
       return ContentPack.getDay(dayNum);
     }
-    if (typeof LEARNING_PLAN !== 'undefined') return LEARNING_PLAN[dayNum - 1] || null;
+    if (typeof Pm30Pack !== 'undefined') return Pm30Pack.getPlan()?.[dayNum - 1] || null;
     return null;
   },
 
@@ -279,7 +279,8 @@ const SpacedRepetition = {
     if (typeof ContentPack !== 'undefined' && ContentPack.getGlossaryCards) {
       return ContentPack.getGlossaryCards() || [];
     }
-    return typeof GLOSSARY_CARDS !== 'undefined' ? GLOSSARY_CARDS : [];
+    if (typeof Pm30Pack !== 'undefined') return Pm30Pack.getGlossary?.() || [];
+    return [];
   },
 
   dayTextBlob(plan) {
@@ -439,8 +440,8 @@ const SpacedRepetition = {
     const interview =
       typeof ContentPack !== 'undefined' && ContentPack.getInterview
         ? ContentPack.getInterview() || []
-        : typeof INTERVIEW_QUESTIONS !== 'undefined'
-          ? INTERVIEW_QUESTIONS
+        : typeof Pm30Pack !== 'undefined'
+          ? Pm30Pack.getInterview() || []
           : [];
 
     const learnedPlans = learned

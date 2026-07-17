@@ -181,6 +181,18 @@ body.mode-home .mascot-root.is-hidden {
 .mascot-check-label {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mascot-check-item.is-soft {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.mascot-check-item.is-soft:hover {
+  background: transparent;
 }
 
 .mascot-check-detail {

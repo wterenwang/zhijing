@@ -1,9 +1,10 @@
 /**
  * DeepSeek AI 点评（可选）：API Key 仅存本机 localStorage，手动触发
  */
-const DEEPSEEK_KEY_STORAGE = 'embodied-pm-deepseek-key';
+const DEEPSEEK_KEY_STORAGE = 'zhijing-deepseek-key';
+const DEEPSEEK_KEY_STORAGE_LEGACY = 'embodied-pm-deepseek-key';
 
-const AI_REVIEW_SYSTEM = `你是产品经理学习教练。用户完成岗位学习路径中的练习题后，需要「点评」和「参考答案」。
+const AI_REVIEW_SYSTEM = `你是岗位学习路径的练习教练。用户完成当日练习后，需要「点评」和「参考答案」。
 
 输出格式（Markdown，严格按此结构）：
 
@@ -15,7 +16,8 @@ const AI_REVIEW_SYSTEM = `你是产品经理学习教练。用户完成岗位学
 ## 参考答案
 给出可直接学习的参考范例（250-450 字），要求：
 - 覆盖题目与全部自检要点
-- PM 视角，有具体案例或事实，避免空泛套话
+- 贴合题目所属行业/岗位视角，有具体案例或事实，避免空泛套话
+- 不要默认写成产品经理（PM）口吻，除非题目本身明确是产品经理场景
 - 开头注明：以下为参考范例，非唯一标准答案，鼓励形成自己的表述
 
 ## 对照建议
@@ -25,13 +27,38 @@ const AI_REVIEW_SYSTEM = `你是产品经理学习教练。用户完成岗位学
 
 const AiReview = {
   getApiKey() {
-    return (localStorage.getItem(DEEPSEEK_KEY_STORAGE) || '').trim();
+    const cur = (localStorage.getItem(DEEPSEEK_KEY_STORAGE) || '').trim();
+    if (cur) return cur;
+    const legacy = (localStorage.getItem(DEEPSEEK_KEY_STORAGE_LEGACY) || '').trim();
+    if (legacy) {
+      try {
+        localStorage.setItem(DEEPSEEK_KEY_STORAGE, legacy);
+        localStorage.removeItem(DEEPSEEK_KEY_STORAGE_LEGACY);
+      } catch {
+        /* ignore */
+      }
+      return legacy;
+    }
+    return '';
   },
 
   setApiKey(key) {
     const k = (key || '').trim();
-    if (k) localStorage.setItem(DEEPSEEK_KEY_STORAGE, k);
-    else localStorage.removeItem(DEEPSEEK_KEY_STORAGE);
+    if (k) {
+      localStorage.setItem(DEEPSEEK_KEY_STORAGE, k);
+      try {
+        localStorage.removeItem(DEEPSEEK_KEY_STORAGE_LEGACY);
+      } catch {
+        /* ignore */
+      }
+    } else {
+      localStorage.removeItem(DEEPSEEK_KEY_STORAGE);
+      try {
+        localStorage.removeItem(DEEPSEEK_KEY_STORAGE_LEGACY);
+      } catch {
+        /* ignore */
+      }
+    }
   },
 
   hasApiKey() {
@@ -71,13 +98,20 @@ const AiReview = {
 
   /**
    * 底层对话：供点评、内容包生成等复用
-   * @param {{ messages: Array, temperature?: number, max_tokens?: number, model?: string }} opts
+   * @param {{ messages: Array, temperature?: number, max_tokens?: number, model?: string, signal?: AbortSignal }} opts
    */
-  async chat({ messages, temperature = 0.5, max_tokens = 1500, model = 'deepseek-chat' }) {
+  async chat({ messages, temperature = 0.5, max_tokens = 1500, model = 'deepseek-chat', signal } = {}) {
     const apiKey = this.getApiKey();
     if (!apiKey) {
       const err = new Error('请先开启智能功能');
       err.code = 'NO_KEY';
+      throw err;
+    }
+
+    if (signal?.aborted) {
+      const err = new Error('已停止生成');
+      err.code = 'ABORTED';
+      err.name = 'AbortError';
       throw err;
     }
 
@@ -93,17 +127,29 @@ const AiReview = {
       throw err;
     }
 
-    const res = await fetch('/api/deepseek/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiKey,
-        model,
-        messages,
-        temperature,
-        max_tokens,
-      }),
-    });
+    let res;
+    try {
+      res = await fetch('/api/deepseek/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey,
+          model,
+          messages,
+          temperature,
+          max_tokens,
+        }),
+        signal,
+      });
+    } catch (e) {
+      if (e?.name === 'AbortError' || signal?.aborted) {
+        const err = new Error('已停止生成');
+        err.code = 'ABORTED';
+        err.name = 'AbortError';
+        throw err;
+      }
+      throw e;
+    }
 
     const rawText = await res.text();
     let data;
@@ -157,28 +203,18 @@ const AiReview = {
   openSettingsModal() {
     const modal = document.getElementById('ai-key-modal');
     const input = document.getElementById('ai-key-input');
-    const searchInput = document.getElementById('search-key-input');
-    const providerSelect = document.getElementById('search-provider-select');
     if (input) input.value = AiReview.getApiKey();
-    if (typeof HotFeed !== 'undefined') {
-      if (searchInput) searchInput.value = HotFeed.getSearchKey();
-      if (providerSelect) providerSelect.value = HotFeed.getSearchProvider();
-    }
     modal?.classList.add('open');
   },
 
   init({ onNeedKey, renderMarkdown }) {
     const modal = document.getElementById('ai-key-modal');
     const input = document.getElementById('ai-key-input');
-    const searchInput = document.getElementById('search-key-input');
-    const providerSelect = document.getElementById('search-provider-select');
     const statusEl = document.getElementById('ai-key-status');
 
     const refreshStatus = async () => {
       if (!statusEl) return;
       const k = AiReview.getApiKey();
-      const searchKey = typeof HotFeed !== 'undefined' ? HotFeed.getSearchKey() : '';
-      const provider = typeof HotFeed !== 'undefined' ? HotFeed.getSearchProvider() : 'bocha';
       const proxy = await AiReview.checkProxy();
       let proxyHint = '';
       if (!proxy.ok) {
@@ -187,12 +223,9 @@ const AiReview = {
         proxyHint = ' · AI 代理已连接';
       }
       const llmPart = k
-        ? `DeepSeek：${AiReview.maskKey(k)}`
+        ? `DeepSeek：${AiReview.maskKey(k)}（含 Web Search）`
         : 'DeepSeek：未配置';
-      const searchPart = searchKey
-        ? `搜索(${provider})：${AiReview.maskKey(searchKey)}`
-        : '搜索：未配置';
-      statusEl.textContent = `${llmPart} · ${searchPart}${proxyHint}`;
+      statusEl.textContent = `${llmPart}${proxyHint}`;
     };
 
     const openModal = () => {
@@ -209,10 +242,6 @@ const AiReview = {
 
     document.getElementById('ai-key-save')?.addEventListener('click', () => {
       AiReview.setApiKey(input?.value || '');
-      if (typeof HotFeed !== 'undefined') {
-        HotFeed.setSearchKey(searchInput?.value || '');
-        HotFeed.setSearchProvider(providerSelect?.value || 'bocha');
-      }
       refreshStatus();
       modal?.classList.remove('open');
     });
@@ -220,10 +249,6 @@ const AiReview = {
     document.getElementById('ai-key-clear')?.addEventListener('click', () => {
       AiReview.setApiKey('');
       if (input) input.value = '';
-      if (typeof HotFeed !== 'undefined') {
-        HotFeed.setSearchKey('');
-        if (searchInput) searchInput.value = '';
-      }
       refreshStatus();
     });
 

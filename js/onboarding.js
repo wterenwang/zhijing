@@ -19,8 +19,7 @@ const OnboardingGuide = (() => {
     return `打卡、阅读、术语<strong>都不依赖</strong>密钥。只有想要 AI 点评、一键生成专属课表、今日资讯时才需要开。<br>
       <ol class="onb-steps">
         <li>点「更多」里的「开启智能功能」</li>
-        <li>填入 DeepSeek 密钥（点评 / 生成课表够用）</li>
-        <li>想看资讯解读再另填搜索密钥</li>
+        <li>填入 DeepSeek 密钥（点评、生成课表、联网搜资料一次搞定）</li>
       </ol>
       <button type="button" class="btn-primary onb-api-btn" data-onb-open-api>打开配置面板</button>`;
   }

@@ -3,13 +3,12 @@
  * 数据写入 appData.hotFeed / appData.hotArchive；搜索 Key 单独存 localStorage
  */
 const HotFeed = (() => {
-  const SEARCH_KEY_STORAGE = 'embodied-pm-search-key';
-  const SEARCH_PROVIDER_STORAGE = 'embodied-pm-search-provider';
   const WINDOW_DAYS = 7;
-  const MIN_RESULTS = 5;
+  const MIN_RESULTS = 3;
   const SEARCH_COUNT = 18;
 
-  const QUERY_POOL = [
+  /** 无路径上下文时的兜底（内置 PM 演示路径） */
+  const QUERY_POOL_FALLBACK = [
     '产品经理 产品设计 用户体验 近一周 新闻',
     '互联网产品 需求分析 增长 本周',
     'A/B测试 产品指标 上线复盘 新闻',
@@ -43,17 +42,17 @@ const HotFeed = (() => {
     { keywords: ['sim-to-real', '仿真'], label: '世界模型 / Sim-to-Real', hub: '/doc/module-4/04-world-model', glossary: 'Sim-to-Real' },
   ];
 
-  const HOT_SYSTEM = `你是产品经理学习日课的策展编辑，面向「产品经理入门 / 岗位学习」读者，输出中文。
+  const HOT_SYSTEM_FALLBACK = `你是岗位学习日课的策展编辑，输出中文。
 
-任务：从 search_results 中挑选 3～5 条不同事件的近期动态，每条写简短 PM 视角解读。时间范围：近 ${WINDOW_DAYS} 天。
+任务：从 search_results 中挑选 3～5 条不同事件的近期动态，每条写简短岗位视角解读。时间范围：近 ${WINDOW_DAYS} 天。
 
 硬性规则：
 1. FACTS_ONLY：事实必须能在 search_results 的 title/snippet 中找到依据。
 2. SOURCES：每条 sources[].url 必须精确匹配 search_results 中某条 url，禁止编造链接。
 3. UNIQUE：每条热点使用不同的主来源 url。
 4. EXCLUDE：尽量避开 exclude_urls 中已展示过的 url。
-5. BODY：每条 80～200 字，含背景 + 对 PM 意味着什么（方法、职业成长或产品决策视角）。
-6. tags：给 2～4 个短标签（如 需求、指标、增长、体验）。
+5. BODY：每条 80～200 字，含背景 + 对该岗位意味着什么（方法、职业成长或业务决策视角）。
+6. tags：给 2～4 个短标签。
 7. OUTPUT：仅输出 JSON 对象 {"items":[...]}，不要用 markdown 代码块包裹。
 
 输出 schema：
@@ -66,8 +65,9 @@ const HotFeed = (() => {
       return Pm30Hub.getChapterLinks();
     }
     if (builtinId === 'embodied-ai-pm') return CHAPTER_LINKS_EMBODY;
+    // 自定义路径 / 未激活：优先 PM30 章节映射，勿回落到具身
     if (typeof Pm30Hub !== 'undefined') return Pm30Hub.getChapterLinks();
-    return CHAPTER_LINKS_EMBODY;
+    return [];
   }
 
   let deps = {
@@ -78,24 +78,97 @@ const HotFeed = (() => {
     openSettings: () => {},
     getDeepseekKey: () => '',
     checkProxy: async () => ({ ok: false }),
+    /** 可选：当前路径 { industry, role, title } */
+    getPathMeta: () => null,
   };
 
-  function getSearchKey() {
-    return (localStorage.getItem(SEARCH_KEY_STORAGE) || '').trim();
+  /** 当前学习路径的行业/岗位上下文（自定义包优先，其次项目元数据） */
+  function getPathContext() {
+    const hotCfg = typeof ContentPack !== 'undefined' ? ContentPack.getHotConfig?.() : null;
+    const pack = typeof ContentPack !== 'undefined' ? ContentPack.getActive?.() : null;
+    const project = deps.getPathMeta?.() || null;
+    const industry = String(
+      hotCfg?.industry || pack?.meta?.industry || project?.industry || '',
+    ).trim();
+    const role = String(hotCfg?.role || pack?.meta?.role || project?.role || '').trim();
+    const title = String(pack?.meta?.title || pack?.title || project?.title || '').trim();
+    const audience = [industry, role].filter(Boolean).join(' · ') || title || '岗位学习';
+    const perspective = role || industry || '学习者';
+    const keywords = Array.isArray(hotCfg?.keywords)
+      ? hotCfg.keywords.map((k) => String(k || '').trim()).filter(Boolean)
+      : [];
+    return {
+      industry,
+      role,
+      title,
+      audience,
+      perspective,
+      keywords,
+      systemHint: String(hotCfg?.systemHint || '').trim(),
+    };
   }
 
-  function setSearchKey(key) {
-    const k = (key || '').trim();
-    if (k) localStorage.setItem(SEARCH_KEY_STORAGE, k);
-    else localStorage.removeItem(SEARCH_KEY_STORAGE);
+  function buildQueryPool(ctx) {
+    if (ctx.keywords.length) {
+      return ctx.keywords.map((k) =>
+        /近一周|本周|新闻|动态|资讯/.test(k) ? k : `${k} 近一周 新闻`,
+      );
+    }
+    if (ctx.industry || ctx.role) {
+      const base = [ctx.industry, ctx.role].filter(Boolean).join(' ');
+      return [
+        `${base} 近一周 新闻`,
+        `${ctx.industry || base} 政策 监管 本周`,
+        `${ctx.industry || base} 市场 动态 近一周`,
+        `${ctx.role || base} 业务 实践 新闻`,
+        `${base} 行业 资讯`,
+      ].filter((q, i, arr) => q && arr.indexOf(q) === i);
+    }
+    return QUERY_POOL_FALLBACK.slice();
+  }
+
+  function buildHotSystem(ctx) {
+    const audience = ctx.audience || '岗位学习';
+    const perspective = ctx.perspective || '学习者';
+    let prompt = `你是「${audience}」学习日课的策展编辑，面向该路径读者，输出中文。
+
+任务：从 search_results 中挑选 3～5 条不同事件的近期动态，每条写简短「${perspective}」视角解读。时间范围：近 ${WINDOW_DAYS} 天。
+
+硬性规则：
+1. FACTS_ONLY：事实必须能在 search_results 的 title/snippet 中找到依据。
+2. SOURCES：每条 sources[].url 必须精确匹配 search_results 中某条 url，禁止编造链接。
+3. UNIQUE：每条热点使用不同的主来源 url。
+4. EXCLUDE：尽量避开 exclude_urls 中已展示过的 url。
+5. BODY：每条 80～200 字，含背景 + 对该岗位意味着什么（方法、职业成长或业务/专业决策视角）。不要写成产品经理（PM）视角，除非当前岗位本身就是产品经理。
+6. tags：给 2～4 个短标签（贴合该行业/岗位）。
+7. OUTPUT：仅输出 JSON 对象 {"items":[...]}，不要用 markdown 代码块包裹。
+
+输出 schema：
+{"items":[{"title":string,"body":string,"sources":[{"title":string,"url":string}],"follow":string,"tags":[string],"level":"入门"|"在职"}]}`;
+    if (ctx.systemHint) prompt += `\n\n补充：${ctx.systemHint}`;
+    return prompt || HOT_SYSTEM_FALLBACK;
+  }
+
+  function getDeepseekKey() {
+    const fromDeps = deps.getDeepseekKey?.() || '';
+    const fromAi =
+      typeof AiReview !== 'undefined' && typeof AiReview.getApiKey === 'function'
+        ? AiReview.getApiKey()
+        : '';
+    return (fromDeps || fromAi || '').trim();
+  }
+
+  /** 联网搜索只用 DeepSeek Anthropic Web Search */
+  function resolveSearchAuth() {
+    return { provider: 'deepseek', apiKey: getDeepseekKey() };
+  }
+
+  function hasSearchKey() {
+    return !!getDeepseekKey();
   }
 
   function getSearchProvider() {
-    return localStorage.getItem(SEARCH_PROVIDER_STORAGE) || 'bocha';
-  }
-
-  function setSearchProvider(id) {
-    localStorage.setItem(SEARCH_PROVIDER_STORAGE, id === 'tavily' ? 'tavily' : 'bocha');
+    return 'deepseek';
   }
 
   function todayKey() {
@@ -171,9 +244,9 @@ const HotFeed = (() => {
   }
 
   async function runSearch(query) {
-    const apiKey = getSearchKey();
+    const { provider, apiKey } = resolveSearchAuth();
     if (!apiKey) {
-      const err = new Error('请先配置搜索 API Key（博查或 Tavily）');
+      const err = new Error('请先配置 DeepSeek 密钥（智能功能即可联网搜索）');
       err.code = 'NO_SEARCH_KEY';
       throw err;
     }
@@ -181,7 +254,7 @@ const HotFeed = (() => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        provider: getSearchProvider(),
+        provider,
         apiKey,
         query,
         count: SEARCH_COUNT,
@@ -193,7 +266,9 @@ const HotFeed = (() => {
     }
     const results = Array.isArray(data.results) ? data.results : [];
     if (results.length < MIN_RESULTS) {
-      throw new Error(`联网搜索结果不足：${results.length} 条，至少需要 ${MIN_RESULTS} 条。请检查搜索 Key 或稍后重试。`);
+      throw new Error(
+        `联网搜索结果不足：${results.length} 条，至少需要 ${MIN_RESULTS} 条。请稍后重试。`
+      );
     }
     return results;
   }
@@ -216,13 +291,17 @@ const HotFeed = (() => {
       throw err;
     }
 
+    const ctx = getPathContext();
     const user = [
       `date: ${todayKey()}`,
       `window_days: ${WINDOW_DAYS}`,
+      `path_audience: ${ctx.audience}`,
+      `path_role: ${ctx.role || '（未指定）'}`,
+      `path_industry: ${ctx.industry || '（未指定）'}`,
       `refresh_index: ${refreshIndex}`,
       `exclude_urls:\n${excludeUrls.length ? excludeUrls.join('\n') : '（无）'}`,
       `search_results:\n${JSON.stringify(searchResults, null, 2)}`,
-      '请输出 3～5 条不同事件的 items JSON。',
+      `请输出 3～5 条不同事件的 items JSON，解读视角必须是「${ctx.perspective}」，不要写产品经理视角（除非岗位就是产品经理）。`,
     ].join('\n\n');
 
     const res = await fetch('/api/deepseek/chat', {
@@ -234,10 +313,7 @@ const HotFeed = (() => {
         messages: [
           {
             role: 'system',
-            content: (() => {
-              const cfg = typeof ContentPack !== 'undefined' ? ContentPack.getHotConfig() : null;
-              return cfg?.systemHint ? `${HOT_SYSTEM}\n\n补充：${cfg.systemHint}` : HOT_SYSTEM;
-            })(),
+            content: buildHotSystem(ctx),
           },
           { role: 'user', content: user },
         ],
@@ -263,20 +339,19 @@ const HotFeed = (() => {
   async function generate({ refresh = false } = {}) {
     const app = deps.getAppData();
     ensureAppShape(app);
+    const ctx = getPathContext();
     const refreshIndex = refresh ? ((app.hotFeed?.refreshIndex || 0) + 1) : 0;
-    const hotCfg = typeof ContentPack !== 'undefined' ? ContentPack.getHotConfig() : null;
-    const queryPool = (hotCfg?.keywords?.length)
-      ? hotCfg.keywords.map((k) => `${k} 近一周 新闻`)
-      : QUERY_POOL;
+    const queryPool = buildQueryPool(ctx);
     const query = queryPool[refreshIndex % queryPool.length];
     const excludeUrls = refresh && app.hotFeed?.items
       ? app.hotFeed.items.flatMap((it) => (it.sources || []).map((s) => s.url)).filter(Boolean)
       : [];
 
-    setStatus('正在联网搜索产品相关资讯…', 'loading');
+    const topicLabel = ctx.audience !== '岗位学习' ? ctx.audience : '行业';
+    setStatus(`正在联网搜索「${topicLabel}」相关资讯…`, 'loading');
     const results = await runSearch(query);
 
-    setStatus('搜索完成，正在撰写 PM 视角解读…', 'loading');
+    setStatus(`搜索完成，正在撰写「${ctx.perspective}」视角解读…`, 'loading');
     const items = await runLlm(results, excludeUrls, refreshIndex);
 
     const session = {
@@ -359,9 +434,11 @@ const HotFeed = (() => {
 
     const session = app.hotFeed;
     if (!session || !session.items?.length) {
+      const ctx = getPathContext();
+      const topicLabel = ctx.audience !== '岗位学习' ? ctx.audience : '当前路径';
       list.innerHTML = `<div class="hot-empty glass">
         <p>还没有今日资讯。开启智能功能后可一键生成。</p>
-        <p class="hot-empty-desc">将先联网搜索近 ${WINDOW_DAYS} 天产品相关资讯，再由 AI 撰写 PM 视角解读。无搜索结果时不会编造热点。</p>
+        <p class="hot-empty-desc">将先联网搜索近 ${WINDOW_DAYS} 天「${escapeHtml(topicLabel)}」相关资讯，再由 AI 撰写「${escapeHtml(ctx.perspective)}」视角解读。无搜索结果时不会编造热点。</p>
       </div>`;
       if (meta) meta.textContent = '';
       return;
@@ -471,23 +548,19 @@ const HotFeed = (() => {
       renderArchiveHint,
       generate,
       matchLinks,
-      getSearchKey,
-      setSearchKey,
       getSearchProvider,
-      setSearchProvider,
-      SEARCH_KEY_STORAGE,
+      resolveSearchAuth,
+      hasSearchKey,
     };
   }
 
   return {
     init,
     matchLinks,
-    getSearchKey,
-    setSearchKey,
     getSearchProvider,
-    setSearchProvider,
-    /** 供 PackGenerator 等复用；不强制最少条数 */
+    resolveSearchAuth,
+    /** 供 PackGenerator 等复用 */
     runSearch,
-    hasSearchKey: () => !!getSearchKey(),
+    hasSearchKey,
   };
 })();

@@ -10,8 +10,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 PORT = 3000
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-BOCHA_URL = "https://api.bochaai.com/v1/web-search"
-TAVILY_URL = "https://api.tavily.com/search"
+DEEPSEEK_ANTHROPIC_URL = "https://api.deepseek.com/anthropic/v1/messages"
 
 
 class ProxyHandler(SimpleHTTPRequestHandler):
@@ -106,10 +105,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         api_key = (payload.get("apiKey") or "").strip()
         if not api_key:
-            self._json(400, {"error": {"message": "缺少搜索 API Key"}})
+            self._json(400, {"error": {"message": "缺少 DeepSeek API Key"}})
             return
 
-        provider = (payload.get("provider") or "bocha").strip().lower()
         query = (payload.get("query") or "").strip()
         if not query:
             self._json(400, {"error": {"message": "缺少搜索 query"}})
@@ -122,10 +120,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         count = max(1, min(count, 50))
 
         try:
-            if provider == "tavily":
-                results = self._search_tavily(api_key, query, count)
-            else:
-                results = self._search_bocha(api_key, query, count)
+            results = self._search_deepseek(api_key, query, count)
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             try:
@@ -149,57 +144,97 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self._json(
             200,
             {
-                "provider": provider if provider == "tavily" else "bocha",
+                "provider": "deepseek",
                 "query": query,
                 "results": results,
             },
         )
 
-    def _search_bocha(self, api_key, query, count):
+    def _search_deepseek(self, api_key, query, count):
+        """DeepSeek Anthropic 兼容口的服务端 web_search（同一 DeepSeek Key）。"""
         body = {
-            "query": query,
-            "summary": True,
-            "freshness": "oneWeek",
-            "count": count,
+            "model": "deepseek-chat",
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "You must use the web_search tool now. "
+                        "Find high-quality educational web pages (tutorials, official docs, "
+                        "encyclopedias, lectures) about the following topic. "
+                        f"Search query: {query}\n"
+                        "Prefer Chinese sources when the query is Chinese. "
+                        "Do not answer from memory; search first."
+                    ),
+                }
+            ],
+            "tools": [
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": 3,
+                }
+            ],
         }
         req = urllib.request.Request(
-            BOCHA_URL,
+            DEEPSEEK_ANTHROPIC_URL,
             data=json.dumps(body).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+        results = self._extract_anthropic_web_results(data)
+        return results[:count]
 
-        pages = (
-            (data.get("data") or {}).get("webPages")
-            or data.get("webPages")
-            or {}
-        )
-        values = pages.get("value") or []
-        return self._normalize_results(values)
+    def _extract_anthropic_web_results(self, data):
+        items = []
+        content = data.get("content") if isinstance(data, dict) else None
+        if not isinstance(content, list):
+            return []
 
-    def _search_tavily(self, api_key, query, count):
-        body = {
-            "api_key": api_key,
-            "query": query,
-            "search_depth": "basic",
-            "max_results": count,
-            "include_answer": False,
-        }
-        req = urllib.request.Request(
-            TAVILY_URL,
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        values = data.get("results") or []
-        return self._normalize_results(values)
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "web_search_tool_result":
+                payload = block.get("content")
+                if isinstance(payload, list):
+                    for hit in payload:
+                        if isinstance(hit, dict) and hit.get("type") in (
+                            "web_search_result",
+                            None,
+                        ):
+                            items.append(
+                                {
+                                    "url": hit.get("url") or "",
+                                    "title": hit.get("title") or hit.get("url") or "",
+                                    "snippet": (
+                                        hit.get("page_age")
+                                        or hit.get("snippet")
+                                        or hit.get("summary")
+                                        or ""
+                                    ),
+                                }
+                            )
+                elif isinstance(payload, dict) and payload.get("url"):
+                    items.append(payload)
+            for cite in block.get("citations") or []:
+                if not isinstance(cite, dict):
+                    continue
+                if cite.get("type") == "web_search_result_location" or cite.get("url"):
+                    items.append(
+                        {
+                            "url": cite.get("url") or "",
+                            "title": cite.get("title") or cite.get("url") or "",
+                            "snippet": cite.get("cited_text") or "",
+                        }
+                    )
+
+        return self._normalize_results(items)
 
     def _normalize_results(self, items):
         out = []
@@ -277,11 +312,11 @@ def main():
     os.chdir(ROOT)
     print()
     print("=" * 48)
-    print("  具身智能 PM 学习工具 - AI 代理服务")
+    print("  知径 · 本地 AI 代理服务")
     print("=" * 48)
     print(f"  地址: http://localhost:{PORT}/index.html")
     print(f"  健康检查: http://localhost:{PORT}/api/deepseek/health")
-    print("  接口: /api/deepseek/chat  /api/search")
+    print("  接口: /api/deepseek/chat  /api/search（DeepSeek Web Search）")
     print("  按 Ctrl+C 停止")
     print("=" * 48)
     print()

@@ -143,20 +143,568 @@ const MascotCompanion = (() => {
     return !hasUserPaths();
   }
 
+  function listUserProjectsSorted() {
+    return listUserProjects().slice().sort((a, b) => {
+      const ta = Date.parse(a.updatedAt || a.createdAt || 0) || 0;
+      const tb = Date.parse(b.updatedAt || b.createdAt || 0) || 0;
+      return tb - ta;
+    });
+  }
+
   function resolveFocusProject() {
     const projects = typeof ProjectPlatform !== 'undefined' ? ProjectPlatform.list() : [];
     if (!projects.length) return null;
 
+    const user = listUserProjectsSorted();
     const lastId = localStorage.getItem(LAST_OPEN_KEY);
+
+    // 已有自建路径：永远优先盯用户路径（忽略上次打开的展示样例）
+    if (user.length) {
+      if (lastId) {
+        const hit = user.find((p) => p.id === lastId);
+        if (hit) return hit;
+      }
+      return user[0];
+    }
+
+    // 尚无自建：可盯展示样例 / 上次打开
     if (lastId) {
       const hit = projects.find((p) => p.id === lastId);
       if (hit) return hit;
     }
-    // 无自建路径时仍可盯默认展示课表，但文案会催新建
-    const sample = projects.find((p) => isBuiltinSample(p));
-    if (sample) return sample;
-    const user = listUserProjects();
-    return user[0] || projects[0];
+    return projects.find((p) => isBuiltinSample(p)) || projects[0];
+  }
+
+  /** 单条路径的今日进度快照（供聚合 / 单路径复用） */
+  function summarizePathDay(project) {
+    const name = project.shortName || project.title || '未命名路径';
+    const status = project.packStatus || 'ready';
+    if (status === 'generating' || status === 'failed' || status === 'cancelled') {
+      return {
+        project,
+        name,
+        status,
+        ready: false,
+        allDone: false,
+        dayNum: 1,
+        practice: { done: 0, answered: 0, total: 0, complete: false },
+        feynmanDone: false,
+        checkinDone: false,
+        checklist: null,
+        primaryFocus: 'sprint',
+        streak: 0,
+        checked: 0,
+        total: project.days || 30,
+        topic: '',
+      };
+    }
+
+    const { checked, total } = ProjectPlatform.progressStats(project.id);
+    const data = loadProjectData(project.id) || {};
+    const dayNum = getTodayDayNum(data, total);
+    const checkinDone = !!(data.checkins && data.checkins[String(dayNum)]);
+    const exTotal = getExerciseTotal(project, dayNum, data);
+    const practice = getPracticeProgress(data, dayNum, exTotal);
+    const feynmanDone = hasFeynman(data, dayNum);
+    const checklist = buildChecklist({ practice, feynmanDone, checkinDone });
+    const planDay = getPlanDayForProject(project, dayNum);
+    return {
+      project,
+      name,
+      status: 'ready',
+      ready: true,
+      allDone: checklist.every((t) => t.done),
+      dayNum,
+      practice,
+      feynmanDone,
+      checkinDone,
+      notesDone: hasNotes(data, dayNum),
+      checklist,
+      primaryFocus: firstIncompleteFocus(checklist),
+      streak: calcStreak(data, dayNum),
+      yesterdayOk: hadYesterday(data, dayNum),
+      checked,
+      total,
+      pct: total ? Math.round((checked / total) * 100) : 0,
+      topic: planDay?.topic ? String(planDay.topic) : '',
+      milestone: findMilestone(checked, total),
+    };
+  }
+
+  const AGGREGATE_LIST_MAX = 3;
+
+  /** 多路径：每条一行摘要；未完成优先，最多 3 条 +「还有 N 条」 */
+  function buildAggregateChecklist(snaps, focusId) {
+    const sorted = snaps.slice().sort((a, b) => {
+      const aInc = a.ready && !a.allDone ? 0 : a.ready ? 1 : 2;
+      const bInc = b.ready && !b.allDone ? 0 : b.ready ? 1 : 2;
+      if (aInc !== bInc) return aInc - bInc;
+      if (focusId) {
+        if (a.project.id === focusId) return -1;
+        if (b.project.id === focusId) return 1;
+      }
+      return 0;
+    });
+
+    const visible = sorted.slice(0, AGGREGATE_LIST_MAX);
+    const rest = sorted.length - visible.length;
+    const items = visible.map((s) => {
+      if (!s.ready) {
+        return {
+          id: `path-${s.project.id}`,
+          label: s.name,
+          detail: s.status === 'generating' ? '课表生成中' : s.status === 'cancelled' ? '已停止' : '生成失败',
+          done: false,
+          focus: 'sprint',
+          projectId: s.project.id,
+          soft: true,
+        };
+      }
+      if (s.allDone) {
+        return {
+          id: `path-${s.project.id}`,
+          label: s.name,
+          detail: `第${s.dayNum}天 · 今日齐了`,
+          done: true,
+          focus: 'sprint',
+          projectId: s.project.id,
+        };
+      }
+      const parts = [];
+      if (!s.practice.complete) {
+        parts.push(`练习 ${s.practice.done}/${s.practice.total || '?'}`);
+      }
+      if (!s.feynmanDone) parts.push('复述待写');
+      if (!s.checkinDone) parts.push('未打卡');
+      return {
+        id: `path-${s.project.id}`,
+        label: s.name,
+        detail: parts.join(' · ') || '有任务未完成',
+        done: false,
+        focus: s.primaryFocus,
+        projectId: s.project.id,
+      };
+    });
+
+    if (rest > 0) {
+      items.push({
+        id: 'more-paths',
+        label: `还有 ${rest} 条路径`,
+        detail: '请在上方卡片查看',
+        done: false,
+        focus: null,
+        projectId: null,
+        soft: true,
+        isMore: true,
+      });
+    }
+    return items;
+  }
+
+  function pickCtaSnap(snaps, focusId) {
+    const incomplete = snaps.filter((s) => s.ready && !s.allDone);
+    if (focusId) {
+      const hit = incomplete.find((s) => s.project.id === focusId);
+      if (hit) return hit;
+    }
+    if (incomplete.length) return incomplete[0];
+    if (focusId) {
+      const hit = snaps.find((s) => s.project.id === focusId);
+      if (hit) return hit;
+    }
+    return snaps.find((s) => s.ready) || snaps[0] || null;
+  }
+
+  function firstIncompleteFocus(checklist) {
+    const hit = (checklist || []).find((t) => !t.done && t.focus);
+    return hit ? hit.focus : 'sprint';
+  }
+
+  function primaryCta(checklist, projectId) {
+    const hit = (checklist || []).find((t) => !t.done);
+    if (!hit) {
+      return { label: '再看一眼', projectId, focus: 'sprint' };
+    }
+    if (hit.id === 'practice') return { label: '去做练习', projectId, focus: 'practice' };
+    if (hit.id === 'feynman') return { label: '写复述', projectId, focus: 'feynman' };
+    if (hit.focus === 'practice') return { label: '去做练习', projectId, focus: 'practice' };
+    if (hit.focus === 'feynman') return { label: '写复述', projectId, focus: 'feynman' };
+    if (hit.focus === 'checkin') return { label: '去打卡', projectId, focus: 'checkin' };
+    return { label: '去打卡', projectId, focus: 'checkin' };
+  }
+
+  function ctaFromSnap(snap) {
+    if (!snap?.ready) {
+      return snap?.status === 'failed'
+        ? null
+        : { label: '查看进度', projectId: snap?.project?.id, focus: 'sprint' };
+    }
+    if (snap.allDone) {
+      return { label: '再看一眼', projectId: snap.project.id, focus: 'sprint' };
+    }
+    return primaryCta(snap.checklist, snap.project.id);
+  }
+
+  function buildMultiPathContext(snaps, focusProject) {
+    const focusId = focusProject?.id || null;
+    const ready = snaps.filter((s) => s.ready);
+    const incomplete = ready.filter((s) => !s.allDone);
+    const generating = snaps.filter((s) => s.status === 'generating');
+    const ctaSnap = pickCtaSnap(snaps, focusId);
+    const checklist = buildAggregateChecklist(snaps, focusId);
+    const project = ctaSnap?.project || focusProject || snaps[0]?.project || null;
+    const hour = new Date().getHours();
+    const pathNames = incomplete.map((s) => s.name).slice(0, 3);
+
+    if (!ready.length && generating.length) {
+      return {
+        kind: 'generating',
+        project: generating[0].project,
+        multi: true,
+        pathSnaps: snaps,
+        messages: [
+          generating.length > 1
+            ? `有 ${generating.length} 条路径还在生成课表，径径先帮你看着～`
+            : `「${generating[0].name}」还在准备中，径径先帮你看着进度～`,
+          '课表生成中…可以先去别处逛逛，好了径径再叫你！',
+        ],
+        cta: null,
+        checklist,
+        streak: 0,
+      };
+    }
+
+    if (!incomplete.length && ready.length) {
+      const msgs = [
+        ready.length > 1
+          ? `今天 ${ready.length} 条路径任务都齐了！练习、复述、打卡全满～径径给你比心！`
+          : `「${ready[0].name}」今日任务全满！径径给你比心！`,
+        hourGreeting(),
+      ];
+      return {
+        kind: 'all_done',
+        project,
+        multi: true,
+        pathSnaps: snaps,
+        dayNum: ctaSnap?.dayNum,
+        messages: msgs,
+        cta: ctaFromSnap(ctaSnap),
+        checklist,
+        streak: ctaSnap?.streak || 0,
+      };
+    }
+
+    const msgs = [];
+    if (incomplete.length > 1) {
+      msgs.push(
+        `今天还有 ${incomplete.length} 条路径没收工：${pathNames.join('、')}${
+          incomplete.length > pathNames.length ? '…' : ''
+        }`,
+      );
+    } else if (incomplete.length === 1) {
+      msgs.push(`「${incomplete[0].name}」今天还有任务没勾完～`);
+    }
+
+    if (ctaSnap?.ready && !ctaSnap.allDone) {
+      if (!ctaSnap.practice.complete) {
+        const left = (ctaSnap.practice.total || 0) - ctaSnap.practice.done;
+        msgs.push(
+          `先顾「${ctaSnap.name}」：练习还差 ${left} 项（${ctaSnap.practice.done}/${ctaSnap.practice.total}）。`,
+        );
+        if (ctaSnap.topic) msgs.push(`围绕「${ctaSnap.topic}」练一练，勾掉一项也算赢！`);
+      } else if (!ctaSnap.feynmanDone) {
+        msgs.push(`「${ctaSnap.name}」练习好了，补一句费曼复述更牢～`);
+      } else if (!ctaSnap.checkinDone) {
+        if (hour >= 18) {
+          msgs.push(`傍晚啦，「${ctaSnap.name}」还没打卡～收工前点一下？`);
+        } else {
+          msgs.push(`「${ctaSnap.name}」练习和复述都齐了，就差打卡啦！`);
+        }
+      }
+    }
+
+    if (ready.length > incomplete.length && incomplete.length) {
+      msgs.push(
+        `已有 ${ready.length - incomplete.length} 条今日齐了；剩下的点清单就能跳过去。`,
+      );
+    }
+    msgs.push(hourGreeting());
+
+    let kind = 'nudge';
+    if (ctaSnap?.ready && !ctaSnap.allDone) {
+      if (!ctaSnap.practice.complete) kind = 'practice';
+      else if (!ctaSnap.feynmanDone) kind = 'recite';
+      else if (!ctaSnap.checkinDone) kind = 'checkin';
+    }
+
+    return {
+      kind,
+      project,
+      multi: true,
+      pathSnaps: snaps,
+      dayNum: ctaSnap?.dayNum,
+      messages: msgs.filter(Boolean),
+      cta: ctaFromSnap(ctaSnap),
+      checklist,
+      streak: ctaSnap?.streak || 0,
+      incompleteCount: incomplete.length,
+      pathCount: snaps.length,
+    };
+  }
+
+  function buildContext() {
+    const user = listUserProjectsSorted();
+
+    // —— 多条个人路径：今日聚合 ——
+    if (user.length >= 2) {
+      const snaps = user.map(summarizePathDay);
+      return buildMultiPathContext(snaps, resolveFocusProject());
+    }
+
+    // —— 单条个人路径 / 仅展示样例：沿用明细清单 ——
+    const project = resolveFocusProject();
+    if (!project) {
+      return {
+        kind: 'empty',
+        project: null,
+        messages: [
+          '还没有自己的路径哦～默认课表只是展示，点「新建路径」才是主线！',
+          '填行业和岗位，创建属于你的知径～径径陪你。',
+        ],
+        cta: { label: '新建路径', action: 'create' },
+        checklist: null,
+      };
+    }
+
+    if (project.packStatus === 'generating') {
+      return {
+        kind: 'generating',
+        project,
+        messages: [
+          `「${project.shortName || project.title}」还在准备中，径径先帮你看着进度～`,
+          '课表生成中…可以先去别处逛逛，好了径径再叫你！',
+        ],
+        cta: null,
+        checklist: null,
+      };
+    }
+
+    if (project.packStatus === 'failed' || project.packStatus === 'cancelled') {
+      return {
+        kind: 'failed',
+        project,
+        messages: [
+          project.packStatus === 'cancelled'
+            ? '上次生成已停止…要不要重新生成？径径等你～'
+            : '上次生成没成功…要不要再试一次？径径给你加油！',
+          '点卡片上的「重新生成」就好～',
+        ],
+        cta: null,
+        checklist: null,
+      };
+    }
+
+    // 单条个人路径也带上 pathSnaps，方便以后扩展
+    if (user.length === 1 && !isBuiltinSample(project)) {
+      const snap = summarizePathDay(project);
+      const singleCtx = buildSinglePathContextFromSnap(snap);
+      singleCtx.pathSnaps = [snap];
+      singleCtx.multi = false;
+      return singleCtx;
+    }
+
+    const snap = summarizePathDay(project);
+    return buildSinglePathContextFromSnap(snap);
+  }
+
+  function buildSinglePathContextFromSnap(snap) {
+    const project = snap.project;
+    const name = snap.name;
+    const {
+      dayNum,
+      practice,
+      feynmanDone,
+      checkinDone,
+      notesDone,
+      checklist,
+      streak,
+      yesterdayOk,
+      checked,
+      total,
+      pct,
+      topic,
+      milestone,
+      allDone,
+    } = snap;
+    const hour = new Date().getHours();
+    const cta = primaryCta(checklist, project.id);
+
+    if (checked === 0 && !checkinDone && practice.done === 0 && !feynmanDone) {
+      if (isBuiltinSample(project)) {
+        return {
+          kind: 'start',
+          project,
+          dayNum,
+          messages: [
+            `「${name}」还是展示课表哦～想认真学，先新建自己的路径？`,
+            hourGreeting(),
+            topic
+              ? `展示主题是「${topic}」，点开可试用；主线请走自建路径。`
+              : '默认课表可试用界面；主线请点「新建路径」。',
+            '提醒：默认课表只是展示样例，真正学习请「新建路径」。',
+          ],
+          cta: { label: '新建我的路径', action: 'create' },
+          checklist,
+          streak: 0,
+        };
+      }
+      return {
+        kind: 'start',
+        project,
+        dayNum,
+        messages: [
+          `「${name}」第 ${dayNum} 天，径径盯着你的专属路径～`,
+          hourGreeting(),
+          topic
+            ? `今天主题是「${topic}」，先练一练再复述、打卡？`
+            : '先做今日练习，再写复述、打卡～',
+        ],
+        cta: { label: '开始学习', projectId: project.id, focus: 'practice' },
+        checklist,
+        streak: 0,
+      };
+    }
+
+    if (allDone) {
+      const msgs = [
+        `第 ${dayNum} 天任务全满！练习、复述、打卡都齐了～径径给你比心！`,
+        streak > 1
+          ? `连续 ${streak} 天啦，稳稳的。明天见～`
+          : `进度 ${checked}/${total}（${pct}%）。明天见，记得来哦！`,
+        hourGreeting(),
+      ];
+      if (milestone) {
+        msgs.unshift(
+          milestone.type === 'days'
+            ? `哇，累计打卡 ${milestone.value} 天！径径记下了～`
+            : `进度冲到 ${milestone.value}% 了！太棒了！`
+        );
+      }
+      if (needsCreateNudge() && isBuiltinSample(project)) {
+        msgs.unshift(
+          '展示课表可以玩，但别停在这儿——点「新建路径」才是你的主线！'
+        );
+      }
+      return {
+        kind: 'all_done',
+        project,
+        dayNum,
+        messages: msgs,
+        cta:
+          needsCreateNudge() && isBuiltinSample(project)
+            ? { label: '新建我的路径', action: 'create' }
+            : { label: '再看一眼', projectId: project.id, focus: 'sprint' },
+        checklist,
+        streak,
+      };
+    }
+
+    if (!practice.complete) {
+      const left = practice.total - practice.done;
+      const msgs = [
+        `今日练习还差 ${left} 项（${practice.done}/${practice.total}）～做完再打卡更踏实。`,
+        topic
+          ? `围绕「${topic}」练一练，勾掉一项也算赢！`
+          : '勾掉一项练习也算赢，径径陪你～',
+        practice.answered > practice.done
+          ? '有作答还没勾完成哦，记得勾一下～'
+          : '点「去做练习」，径径带你跳到练习区。',
+        hourGreeting(),
+      ];
+      if (checkinDone) {
+        msgs.unshift('打卡已经点过啦，但练习还没做完——补上更圆满哦！');
+      }
+      if (needsCreateNudge() && isBuiltinSample(project)) {
+        msgs.push('别忘了：默认课表只是展示，点「新建路径」才是主线～');
+      }
+      return {
+        kind: 'practice',
+        project,
+        dayNum,
+        messages: msgs,
+        cta: { label: '去做练习', projectId: project.id, focus: 'practice' },
+        checklist,
+        streak,
+      };
+    }
+
+    if (!feynmanDone) {
+      const msgs = [
+        '练习完成了！再用自己的话写一段复述，记得更牢～',
+        '费曼复述：用一句话向非专业人士讲清楚今天学了什么？',
+        notesDone
+          ? '笔记有了，补一句复述就更完整啦。'
+          : '写满两三句就好，不用长篇大论。',
+        hourGreeting(),
+      ];
+      if (checkinDone) {
+        msgs.unshift('打卡好了，复述还空着——花一分钟补上？');
+      }
+      return {
+        kind: 'recite',
+        project,
+        dayNum,
+        messages: msgs,
+        cta: { label: '写复述', projectId: project.id, focus: 'feynman' },
+        checklist,
+        streak,
+      };
+    }
+
+    if (!checkinDone) {
+      const msgs = [];
+      if (hour >= 18) {
+        msgs.push(`傍晚啦，「${name}」第 ${dayNum} 天还没打卡～收工前点一下？`);
+      } else if (hour >= 12) {
+        msgs.push(`「${name}」第 ${dayNum} 天练习和复述都齐了，就差打卡啦！`);
+      } else {
+        msgs.push(`早起的鸟儿～第 ${dayNum} 天任务快齐了，打个卡吧！`);
+      }
+
+      if (yesterdayOk && streak >= 1) {
+        msgs.push(`昨天打过卡了，今天别断～已经连续 ${streak} 天，接上吧！`);
+      } else if (yesterdayOk) {
+        msgs.push('昨天打过卡了，今天别断签哦～');
+      } else if (streak === 0 && checked > 0) {
+        msgs.push('有几天没来？没关系，今天重新接上就好。');
+      }
+
+      msgs.push(`进度 ${checked}/${total}（${pct}%）。点「去打卡」径径帮你开门！`);
+      msgs.push(hourGreeting());
+
+      return {
+        kind: 'checkin',
+        project,
+        dayNum,
+        messages: msgs,
+        cta: { label: '去打卡', projectId: project.id, focus: 'checkin' },
+        checklist,
+        streak,
+      };
+    }
+
+    return {
+      kind: 'nudge',
+      project,
+      dayNum,
+      messages: [
+        `「${name}」今天还有任务没勾完～看看清单？`,
+        hourGreeting(),
+      ],
+      cta,
+      checklist,
+      streak,
+    };
   }
 
   function getPlanDayForProject(project, dayNum) {
@@ -298,244 +846,6 @@ const MascotCompanion = (() => {
     ];
   }
 
-  function firstIncompleteFocus(checklist) {
-    const hit = checklist.find((t) => !t.done);
-    return hit ? hit.focus : 'sprint';
-  }
-
-  function primaryCta(checklist, projectId) {
-    const hit = checklist.find((t) => !t.done);
-    if (!hit) {
-      return { label: '再看一眼', projectId, focus: 'sprint' };
-    }
-    if (hit.id === 'practice') return { label: '去做练习', projectId, focus: 'practice' };
-    if (hit.id === 'feynman') return { label: '写复述', projectId, focus: 'feynman' };
-    return { label: '去打卡', projectId, focus: 'checkin' };
-  }
-
-  function buildContext() {
-    const project = resolveFocusProject();
-    if (!project) {
-      return {
-        kind: 'empty',
-        project: null,
-        messages: [
-          '还没有自己的路径哦～默认课表只是展示，点「新建路径」才是主线！',
-          '填行业和岗位，创建属于你的知径～径径陪你。',
-        ],
-        cta: { label: '新建路径', action: 'create' },
-        checklist: null,
-      };
-    }
-
-    if (project.packStatus === 'generating') {
-      return {
-        kind: 'generating',
-        project,
-        messages: [
-          `「${project.shortName || project.title}」还在准备中，径径先帮你看着进度～`,
-          '课表生成中…可以先去别处逛逛，好了径径再叫你！',
-        ],
-        cta: null,
-        checklist: null,
-      };
-    }
-
-    if (project.packStatus === 'failed') {
-      return {
-        kind: 'failed',
-        project,
-        messages: [
-          '上次生成没成功…要不要再试一次？径径给你加油！',
-          '失败不可怕，点卡片上的「重新生成」就好～',
-        ],
-        cta: null,
-        checklist: null,
-      };
-    }
-
-    const { checked, total } = ProjectPlatform.progressStats(project.id);
-    const data = loadProjectData(project.id) || {};
-    const dayNum = getTodayDayNum(data, total);
-    const checkinDone = !!(data.checkins && data.checkins[String(dayNum)]);
-    const pct = total ? Math.round((checked / total) * 100) : 0;
-    const name = project.shortName || project.title;
-    const exTotal = getExerciseTotal(project, dayNum, data);
-    const practice = getPracticeProgress(data, dayNum, exTotal);
-    const feynmanDone = hasFeynman(data, dayNum);
-    const notesDone = hasNotes(data, dayNum);
-    const streak = calcStreak(data, dayNum);
-    const yesterdayOk = hadYesterday(data, dayNum);
-    const hour = new Date().getHours();
-    const planDay = getPlanDayForProject(project, dayNum);
-    const topic = planDay?.topic ? String(planDay.topic) : '';
-    const checklist = buildChecklist({ practice, feynmanDone, checkinDone });
-    const allDone = checklist.every((t) => t.done);
-    const cta = primaryCta(checklist, project.id);
-    const milestone = findMilestone(checked, total);
-
-    if (checked === 0 && !checkinDone && practice.done === 0 && !feynmanDone) {
-      const createNudge = needsCreateNudge()
-        ? [
-            '提醒：默认课表只是展示样例，真正学习请「新建路径」。',
-            '可以先点开默认课表看一眼流程，然后马上创建自己的路径～',
-          ]
-        : [];
-      return {
-        kind: 'start',
-        project,
-        dayNum,
-        messages: [
-          `「${name}」还是展示课表哦～想认真学，先新建自己的路径？`,
-          hourGreeting(),
-          topic
-            ? `展示主题是「${topic}」，点开可试用；主线请走自建路径。`
-            : '默认课表可试用界面；主线请点「新建路径」。',
-          ...createNudge,
-        ],
-        cta: needsCreateNudge()
-          ? { label: '新建我的路径', action: 'create' }
-          : { label: '开始学习', projectId: project.id, focus: 'practice' },
-        checklist,
-        streak: 0,
-      };
-    }
-
-    if (allDone) {
-      const msgs = [
-        `第 ${dayNum} 天任务全满！练习、复述、打卡都齐了～径径给你比心！`,
-        streak > 1
-          ? `连续 ${streak} 天啦，稳稳的。明天见～`
-          : `进度 ${checked}/${total}（${pct}%）。明天见，记得来哦！`,
-        hourGreeting(),
-      ];
-      if (milestone) {
-        msgs.unshift(
-          milestone.type === 'days'
-            ? `哇，累计打卡 ${milestone.value} 天！径径记下了～`
-            : `进度冲到 ${milestone.value}% 了！太棒了！`
-        );
-      }
-      if (needsCreateNudge() && isBuiltinSample(project)) {
-        msgs.unshift(
-          '展示课表可以玩，但别停在这儿——点「新建路径」才是你的主线！'
-        );
-      }
-      return {
-        kind: 'all_done',
-        project,
-        dayNum,
-        messages: msgs,
-        cta:
-          needsCreateNudge() && isBuiltinSample(project)
-            ? { label: '新建我的路径', action: 'create' }
-            : { label: '再看一眼', projectId: project.id, focus: 'sprint' },
-        checklist,
-        streak,
-      };
-    }
-
-    // —— 练习优先提醒 ——
-    if (!practice.complete) {
-      const left = practice.total - practice.done;
-      const msgs = [
-        `今日练习还差 ${left} 项（${practice.done}/${practice.total}）～做完再打卡更踏实。`,
-        topic
-          ? `围绕「${topic}」练一练，勾掉一项也算赢！`
-          : '勾掉一项练习也算赢，径径陪你～',
-        practice.answered > practice.done
-          ? '有作答还没勾完成哦，记得勾一下～'
-          : '点「去做练习」，径径带你跳到练习区。',
-        hourGreeting(),
-      ];
-      if (checkinDone) {
-        msgs.unshift('打卡已经点过啦，但练习还没做完——补上更圆满哦！');
-      }
-      if (needsCreateNudge() && isBuiltinSample(project)) {
-        msgs.push('别忘了：默认课表只是展示，点「新建路径」才是主线～');
-      }
-      return {
-        kind: 'practice',
-        project,
-        dayNum,
-        messages: msgs,
-        cta: { label: '去做练习', projectId: project.id, focus: 'practice' },
-        checklist,
-        streak,
-      };
-    }
-
-    // —— 复述提醒 ——
-    if (!feynmanDone) {
-      const msgs = [
-        '练习完成了！再用自己的话写一段复述，记得更牢～',
-        '费曼复述：用一句话向非专业人士讲清楚今天学了什么？',
-        notesDone
-          ? '笔记有了，补一句复述就更完整啦。'
-          : '写满两三句就好，不用长篇大论。',
-        hourGreeting(),
-      ];
-      if (checkinDone) {
-        msgs.unshift('打卡好了，复述还空着——花一分钟补上？');
-      }
-      return {
-        kind: 'recite',
-        project,
-        dayNum,
-        messages: msgs,
-        cta: { label: '写复述', projectId: project.id, focus: 'feynman' },
-        checklist,
-        streak,
-      };
-    }
-
-    // —— 打卡增强提醒（练习+复述都好了，只差打卡） ——
-    if (!checkinDone) {
-      const msgs = [];
-      if (hour >= 18) {
-        msgs.push(`傍晚啦，「${name}」第 ${dayNum} 天还没打卡～收工前点一下？`);
-      } else if (hour >= 12) {
-        msgs.push(`「${name}」第 ${dayNum} 天练习和复述都齐了，就差打卡啦！`);
-      } else {
-        msgs.push(`早起的鸟儿～第 ${dayNum} 天任务快齐了，打个卡吧！`);
-      }
-
-      if (yesterdayOk && streak >= 1) {
-        msgs.push(`昨天打过卡了，今天别断～已经连续 ${streak} 天，接上吧！`);
-      } else if (yesterdayOk) {
-        msgs.push('昨天打过卡了，今天别断签哦～');
-      } else if (streak === 0 && checked > 0) {
-        msgs.push('有几天没来？没关系，今天重新接上就好。');
-      }
-
-      msgs.push(`进度 ${checked}/${total}（${pct}%）。点「去打卡」径径帮你开门！`);
-      msgs.push(hourGreeting());
-
-      return {
-        kind: 'checkin',
-        project,
-        dayNum,
-        messages: msgs,
-        cta: { label: '去打卡', projectId: project.id, focus: 'checkin' },
-        checklist,
-        streak,
-      };
-    }
-
-    // 兜底：有未完成项
-    return {
-      kind: 'nudge',
-      project,
-      dayNum,
-      messages: [
-        `「${name}」今天还有任务没勾完～看看清单？`,
-        hourGreeting(),
-      ],
-      cta,
-      checklist,
-      streak,
-    };
-  }
 
   function figureMarkup() {
     const poses = ['idle', 'cheer', 'think', 'practice', 'point', 'sleepy', 'shy', 'giggle', 'stretch', 'read'];
@@ -654,10 +964,14 @@ const MascotCompanion = (() => {
     });
 
     checklistEl.addEventListener('click', (e) => {
-      const item = e.target.closest('[data-focus]');
-      if (!item || !lastCtx?.project) return;
+      const item = e.target.closest('.mascot-check-item');
+      if (!item) return;
+      if (item.classList.contains('is-soft') && !item.getAttribute('data-project-id')) return;
+      const projectId = item.getAttribute('data-project-id') || lastCtx?.project?.id;
+      const focus = item.getAttribute('data-focus');
+      if (!projectId) return;
       e.stopPropagation();
-      openWithFocus(lastCtx.project.id, item.getAttribute('data-focus'));
+      openWithFocus(projectId, focus || 'sprint');
     });
   }
 
@@ -755,8 +1069,15 @@ const MascotCompanion = (() => {
       lines.push({ text: '戳我 → 去新建路径，径径催你啦～', mood: 'wave' });
     }
     if (ctx?.project && hasUserPaths()) {
-      const name = ctx.project.shortName || ctx.project.title;
-      lines.push({ text: `「${name}」还在等你哦。`, mood: 'read' });
+      if (ctx.multi && ctx.incompleteCount > 1) {
+        lines.push({
+          text: `今天还有 ${ctx.incompleteCount} 条路径没收工，戳我看汇总～`,
+          mood: 'point',
+        });
+      } else {
+        const name = ctx.project.shortName || ctx.project.title;
+        lines.push({ text: `「${name}」还在等你哦。`, mood: 'read' });
+      }
     }
     return lines;
   }
@@ -770,17 +1091,47 @@ const MascotCompanion = (() => {
       return;
     }
     checklistEl.hidden = false;
-    const doneCount = list.filter((t) => t.done).length;
+    const pathRows = list.filter((t) => !t.isMore);
+    const doneCount = pathRows.filter((t) => t.done).length;
+    const head = ctx.multi
+      ? typeof ctx.incompleteCount === 'number'
+        ? `今日路径 · ${ctx.incompleteCount} 条待完成 / 共 ${ctx.pathCount || pathRows.length} 条`
+        : `今日路径 ${doneCount}/${pathRows.length}`
+      : `今日任务 ${list.filter((t) => t.done).length}/${list.length}`;
     checklistEl.innerHTML = `
-      <li class="mascot-checklist-head">今日任务 ${doneCount}/${list.length}</li>
-      ${list.map((t) => `
-        <li class="mascot-check-item ${t.done ? 'is-done' : 'is-todo'}" data-focus="${t.focus}" role="button" tabindex="0" title="${t.done ? '已完成' : '去完成'}">
+      <li class="mascot-checklist-head">${head}</li>
+      ${list
+        .map((t) => {
+          const pid = t.projectId ? ` data-project-id="${escapeAttr(t.projectId)}"` : '';
+          const focus = t.focus ? ` data-focus="${escapeAttr(t.focus)}"` : '';
+          const soft = t.soft || t.isMore ? ' is-soft' : '';
+          const title = t.isMore
+            ? '请在路径卡片中查看'
+            : t.done
+              ? '已完成'
+              : t.projectId
+                ? '去完成'
+                : '';
+          return `<li class="mascot-check-item ${t.done ? 'is-done' : 'is-todo'}${soft}"${pid}${focus} role="button" tabindex="0" title="${title}">
           <span class="mascot-check-mark" aria-hidden="true">${t.done ? '✓' : '○'}</span>
-          <span class="mascot-check-label">${t.label}</span>
-          ${t.detail ? `<span class="mascot-check-detail">${t.detail}</span>` : ''}
-        </li>
-      `).join('')}
+          <span class="mascot-check-label">${escapeHtml(t.label)}</span>
+          ${t.detail ? `<span class="mascot-check-detail">${escapeHtml(t.detail)}</span>` : ''}
+        </li>`;
+        })
+        .join('')}
     `;
+  }
+
+  function escapeHtml(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/'/g, '&#39;');
   }
 
   function renderActions(ctx) {
@@ -799,8 +1150,8 @@ const MascotCompanion = (() => {
           openCreatePath();
         });
       } else {
-        openBtn.textContent = '今日任务';
-        openBtn.title = '展开今日任务清单';
+        openBtn.textContent = ctx.multi ? '今日路径' : '今日任务';
+        openBtn.title = ctx.multi ? '展开多路径今日汇总' : '展开今日任务清单';
         openBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           openTasksPanel(true);
@@ -833,18 +1184,35 @@ const MascotCompanion = (() => {
     }
 
     if (ctx.checklist && typeof openProjectHandler === 'function') {
-      const extras = ctx.checklist.filter((t) => !t.done && t.focus !== ctx.cta?.focus);
-      extras.slice(0, 2).forEach((t) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = t.id === 'practice' ? '练习' : t.id === 'feynman' ? '复述' : '打卡';
-        b.title = `跳到${t.label}`;
-        b.addEventListener('click', (e) => {
-          e.stopPropagation();
-          openWithFocus(ctx.project.id, t.focus);
+      if (ctx.multi && Array.isArray(ctx.pathSnaps)) {
+        const extras = ctx.pathSnaps
+          .filter((s) => s.ready && !s.allDone && s.project.id !== ctx.cta?.projectId)
+          .slice(0, 2);
+        extras.forEach((s) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = (s.name || '路径').slice(0, 6);
+          b.title = `打开「${s.name}」`;
+          b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openWithFocus(s.project.id, s.primaryFocus);
+          });
+          actionsEl.appendChild(b);
         });
-        actionsEl.appendChild(b);
-      });
+      } else {
+        const extras = ctx.checklist.filter((t) => !t.done && t.focus !== ctx.cta?.focus);
+        extras.slice(0, 2).forEach((t) => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = t.id === 'practice' ? '练习' : t.id === 'feynman' ? '复述' : '打卡';
+          b.title = `跳到${t.label}`;
+          b.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openWithFocus(ctx.project.id, t.focus);
+          });
+          actionsEl.appendChild(b);
+        });
+      }
     }
 
     const next = document.createElement('button');
@@ -892,7 +1260,11 @@ const MascotCompanion = (() => {
         checkin: '打卡提醒',
         nudge: '径径提醒',
       };
-      kickerEl.textContent = kickers[ctx.kind] || '今日任务';
+      if (ctx.multi) {
+        kickerEl.textContent = ctx.kind === 'all_done' ? '多路径完成' : '多路径今日';
+      } else {
+        kickerEl.textContent = kickers[ctx.kind] || '今日任务';
+      }
     } else {
       const msgs = buildIdleMessages(ctx);
       const item = msgs[idleTipIndex % msgs.length];

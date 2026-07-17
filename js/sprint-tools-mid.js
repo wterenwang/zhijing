@@ -133,7 +133,12 @@ const SprintToolsMid = {
     const escapeHtml = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
     function getFlashCards() {
-      return typeof ContentPack !== 'undefined' ? ContentPack.getGlossaryCards() : GLOSSARY_CARDS;
+      if (typeof ContentPack !== 'undefined') {
+        const list = ContentPack.getGlossaryCards();
+        if (list?.length) return list;
+      }
+      if (typeof Pm30Pack !== 'undefined') return Pm30Pack.getGlossary?.() || [];
+      return GLOSSARY_CARDS;
     }
 
     let flashIndex = 0;
@@ -204,8 +209,8 @@ const SprintToolsMid = {
         const plan =
           typeof ContentPack !== 'undefined' && ContentPack.getDay
             ? ContentPack.getDay(d)
-            : typeof LEARNING_PLAN !== 'undefined'
-              ? LEARNING_PLAN[d - 1]
+            : typeof Pm30Pack !== 'undefined'
+              ? Pm30Pack.getPlan()?.[d - 1]
               : null;
         const topic = plan ? plan.topic : `第${d}天`;
 
@@ -329,9 +334,9 @@ const SprintToolsMid = {
     }
 
     function pickMockQuestion() {
-      const pool = typeof ContentPack !== 'undefined'
-        ? ContentPack.getInterview()
-        : (typeof INTERVIEW_QUESTIONS !== 'undefined' ? INTERVIEW_QUESTIONS : []);
+      let pool = [];
+      if (typeof ContentPack !== 'undefined') pool = ContentPack.getInterview() || [];
+      if (!pool.length && typeof Pm30Pack !== 'undefined') pool = Pm30Pack.getInterview() || [];
       if (!pool.length) return;
       const q = pool[Math.floor(Math.random() * pool.length)];
       const el = document.getElementById('mock-question');

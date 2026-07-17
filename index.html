@@ -794,6 +794,11 @@
       padding: 8px 12px;
       font-size: 0.82rem;
     }
+    #gen-dock-stop { display: none; }
+    .gen-dock.is-busy #gen-dock-actions { display: flex; }
+    .gen-dock.is-busy #gen-dock-stop { display: inline-flex; }
+    .gen-dock.is-busy #gen-dock-open,
+    .gen-dock.is-busy #gen-dock-dismiss { display: none !important; }
 
     #ai-key-status {
       font-size: 0.78rem;
@@ -3360,7 +3365,7 @@
           <button type="button" class="more-card" data-open-onboarding-api>
             <span class="mc-kicker">帮助</span>
             <span class="mc-title">如何配置 API</span>
-            <span class="mc-desc">分步说明：本地服务、DeepSeek、搜索密钥</span>
+            <span class="mc-desc">分步说明：本地服务、DeepSeek（含联网搜索）</span>
           </button>
           <button type="button" class="more-card" data-open-onboarding>
             <span class="mc-kicker">帮助</span>
@@ -3663,35 +3668,21 @@
         <strong>配置前请确认：</strong>
         <ol>
           <li>桌面版已内置本地服务；网页版请用「启动本地服务」打开。</li>
-          <li>先填 DeepSeek 密钥即可用点评、生成课表；资讯另需搜索密钥。</li>
+          <li>只需填 DeepSeek 密钥：点评、生成课表、联网搜资料/资讯都可用。</li>
           <li>密钥只存在本机，不会上传到我们的服务器。</li>
         </ol>
       </div>
       <p class="modal-hint">
-        <strong>练习点评 / 生成课表</strong>：只需 DeepSeek。
-        <strong>今日资讯</strong>：DeepSeek + 搜索密钥（推荐博查）。
+        一把钥匙搞定：DeepSeek 同时负责对话与 Web Search，无需再配其他搜索服务。
       </p>
       <p id="ai-key-status"></p>
       <label class="modal-field">
-        <span>DeepSeek 密钥（必填）</span>
+        <span>DeepSeek 密钥</span>
         <input type="password" id="ai-key-input" placeholder="sk-... 在 platform.deepseek.com 创建" autocomplete="off">
-      </label>
-      <label class="modal-field">
-        <span>搜索提供商</span>
-        <select id="search-provider-select">
-          <option value="bocha">博查 Bocha（推荐国内）</option>
-          <option value="tavily">Tavily</option>
-        </select>
-      </label>
-      <label class="modal-field">
-        <span>搜索密钥（资讯可选）</span>
-        <input type="password" id="search-key-input" placeholder="博查 / Tavily Key" autocomplete="off">
       </label>
       <p class="modal-hint" style="margin-top:10px">
         获取密钥：
-        <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">DeepSeek</a>
-        · <a href="https://open.bochaai.com/" target="_blank" rel="noopener noreferrer">博查</a>
-        · <a href="https://tavily.com/" target="_blank" rel="noopener noreferrer">Tavily</a>
+        <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">platform.deepseek.com</a>
       </p>
       <div class="modal-actions">
         <button class="btn-secondary" id="ai-key-clear">清除密钥</button>
@@ -3734,9 +3725,10 @@
           <div>
             <label for="create-goal">目标</label>
             <select id="create-goal" style="width:100%;padding:9px 12px;border:1px solid var(--border-glass);border-radius:8px;background:var(--bg-deep);color:var(--text-primary);font-family:var(--font)">
-              <option value="校招">校招</option>
+              <option value="入门" selected>入门</option>
               <option value="转岗">转岗</option>
               <option value="升职">升职</option>
+              <option value="校招">校招</option>
               <option value="兴趣充电">兴趣充电</option>
             </select>
           </div>
@@ -3779,6 +3771,7 @@
       <ul class="gen-dock-log" id="gen-dock-log"></ul>
       <p class="gen-dock-hint">可继续浏览其它路径或功能，生成在后台进行。</p>
       <div class="gen-dock-actions" id="gen-dock-actions">
+        <button type="button" class="btn-secondary btn-danger" id="gen-dock-stop">停止生成</button>
         <button type="button" class="btn-primary" id="gen-dock-open" hidden>打开路径</button>
         <button type="button" class="btn-secondary" id="gen-dock-dismiss">知道了</button>
       </div>
@@ -3808,7 +3801,7 @@
   <script src="js/mascot.js?v=20260717v7"></script>
   <script>
     // ============================================================
-    // 90天学习计划数据（结构化）
+    // 90天学习计划（仅隐藏路径 embodied-ai-pm；勿作产品默认回退）
     // ============================================================
     const LEARNING_PLAN = [
       // 第1周：行业与市场全景扫描
@@ -4011,7 +4004,9 @@
       return typeof ContentPack !== 'undefined' ? ContentPack.getTotalDays() : BUILTIN_TOTAL_DAYS;
     }
     function getPlanDay(dayNum) {
-      return typeof ContentPack !== 'undefined' ? ContentPack.getDay(dayNum) : LEARNING_PLAN[dayNum - 1];
+      return typeof ContentPack !== 'undefined' ? ContentPack.getDay(dayNum) : (
+        typeof Pm30Pack !== 'undefined' ? Pm30Pack.getPlan()?.[dayNum - 1] : null
+      );
     }
     let STORAGE_KEY = null;
     let activeProject = null;
@@ -4720,6 +4715,8 @@
           badge = '<span class="pc-badge" style="color:#ea580c;background:rgba(234,88,12,0.12)">准备中…</span>';
         } else if (p.packStatus === 'failed') {
           badge = '<span class="pc-badge" style="color:#dc2626;background:rgba(220,38,38,0.1)">生成失败</span>';
+        } else if (p.packStatus === 'cancelled') {
+          badge = '<span class="pc-badge" style="color:#64748b;background:rgba(100,116,139,0.12)">已停止</span>';
         } else if (p.isDefault || p.id === ProjectPlatform.DEFAULT_ID) {
           badge = '<span class="pc-badge is-demo">展示样例</span>';
         } else if (
@@ -4734,18 +4731,23 @@
             ? '<span class="pc-badge">专属课表</span>'
             : '<span class="pc-badge" style="color:#d97706;background:rgba(217,119,6,0.12)">课表就绪</span>';
         }
-        const retryBtn = p.packStatus === 'failed'
-          ? `<button type="button" data-retry-project="${p.id}">重新生成</button>`
-          : '';
+        const retryBtn =
+          p.packStatus === 'failed' || p.packStatus === 'cancelled'
+            ? `<button type="button" data-retry-project="${p.id}">重新生成</button>`
+            : '';
+        const stopBtn =
+          p.packStatus === 'generating'
+            ? `<button type="button" data-stop-project="${p.id}">停止生成</button>`
+            : '';
         const hubBtn = (() => {
-          if (p.packStatus === 'generating' || p.packStatus === 'failed') return '';
+          if (p.packStatus === 'generating' || p.packStatus === 'failed' || p.packStatus === 'cancelled') return '';
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
           const pack = typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
           if (pack?.hub?.navigation?.length) return '';
           return `<button type="button" data-hub-project="${p.id}">生成阅读与术语</button>`;
         })();
         const matsBtn = (() => {
-          if (p.packStatus === 'generating' || p.packStatus === 'failed') return '';
+          if (p.packStatus === 'generating' || p.packStatus === 'failed' || p.packStatus === 'cancelled') return '';
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
           const pack = typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
           if (!pack?.plan?.length) return '';
@@ -4769,6 +4771,7 @@
             <div class="pc-bar"><span style="width:${pct}%"></span></div>
             <div class="pc-actions">
               <button type="button" data-open-project="${p.id}">${p.packStatus === 'generating' ? '准备中' : isDemo ? '试用展示' : '开始学习'}</button>
+              ${stopBtn}
               ${retryBtn}
               ${hubBtn}
               ${matsBtn}
@@ -4818,11 +4821,14 @@
         return;
       }
       if (project.packStatus === 'generating') {
-        alert('专属课表还在准备中，请稍候再进。');
+        alert('专属课表还在准备中。可点右下角进度或卡片上的「停止生成」。');
+        GenDock.setExpanded?.(true);
         return;
       }
-      if (project.packStatus === 'failed') {
-        if (confirm('上次生成没有成功。要再试一次吗？')) {
+      if (project.packStatus === 'failed' || project.packStatus === 'cancelled') {
+        if (confirm(project.packStatus === 'cancelled'
+          ? '上次生成已停止。要重新生成吗？'
+          : '上次生成没有成功。要再试一次吗？')) {
           retryGeneratePack(project.id);
         }
         return;
@@ -4948,6 +4954,8 @@
       let busy = false;
       let openProjectId = null;
       let lastMsg = '';
+      let abortCtrl = null;
+      let activeProjectId = null;
 
       function els() {
         return {
@@ -4963,6 +4971,7 @@
           openBtn: document.getElementById('gen-dock-open'),
           dismissBtn: document.getElementById('gen-dock-dismiss'),
           collapseBtn: document.getElementById('gen-dock-collapse'),
+          stopBtn: document.getElementById('gen-dock-stop'),
         };
       }
 
@@ -4998,10 +5007,12 @@
         if (msg) appendLog(msg);
       }
 
-      function start(title) {
+      function start(title, projectId = null) {
         busy = true;
         openProjectId = null;
+        activeProjectId = projectId || null;
         lastMsg = '';
+        abortCtrl = new AbortController();
         const { root, fab, fabLabel, title: titleEl, log, actions, openBtn } = els();
         if (log) log.innerHTML = '';
         if (titleEl) titleEl.textContent = title || '正在准备课表';
@@ -5009,15 +5020,40 @@
         fab?.classList.remove('is-done', 'is-error');
         actions?.classList.remove('is-visible');
         if (openBtn) openBtn.hidden = true;
-        root?.classList.add('is-visible');
-        setExpanded(false);
-        progress('已开始，可继续使用产品…', 1);
+        root?.classList.add('is-visible', 'is-busy');
+        setExpanded(true);
+        progress('已开始，可点「停止生成」随时中断…', 1);
+      }
+
+      function getSignal() {
+        return abortCtrl?.signal;
+      }
+
+      function getActiveProjectId() {
+        return activeProjectId;
+      }
+
+      function requestStop() {
+        if (!busy || !abortCtrl) return false;
+        appendLog('正在停止…');
+        const { status, fabLabel } = els();
+        if (status) status.textContent = '正在停止生成…';
+        if (fabLabel) fabLabel.textContent = '停止中';
+        try {
+          abortCtrl.abort();
+        } catch {
+          /* ignore */
+        }
+        return true;
       }
 
       function finishOk({ message, projectId } = {}) {
         busy = false;
+        abortCtrl = null;
+        activeProjectId = null;
         openProjectId = projectId || null;
-        const { fab, fabLabel, fabPct, actions, openBtn, status, title } = els();
+        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title } = els();
+        root?.classList.remove('is-busy');
         fab?.classList.add('is-done');
         fab?.classList.remove('is-error');
         if (fabLabel) fabLabel.textContent = '已完成';
@@ -5037,8 +5073,11 @@
 
       function finishError(message) {
         busy = false;
+        abortCtrl = null;
+        activeProjectId = null;
         openProjectId = null;
-        const { fab, fabLabel, fabPct, actions, openBtn, status, title } = els();
+        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title } = els();
+        root?.classList.remove('is-busy');
         fab?.classList.add('is-error');
         fab?.classList.remove('is-done');
         if (fabLabel) fabLabel.textContent = '失败';
@@ -5051,12 +5090,34 @@
         setExpanded(true);
       }
 
+      function finishCancelled(message) {
+        busy = false;
+        abortCtrl = null;
+        activeProjectId = null;
+        openProjectId = null;
+        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title, bar } = els();
+        root?.classList.remove('is-busy');
+        fab?.classList.add('is-error');
+        fab?.classList.remove('is-done');
+        if (fabLabel) fabLabel.textContent = '已停止';
+        if (fabPct) fabPct.textContent = '—';
+        if (title) title.textContent = '已停止生成';
+        if (status) status.textContent = message || '已按你的操作停止。可点「重新生成」再试。';
+        if (bar) bar.style.width = '0%';
+        appendLog(message || '已停止生成');
+        actions?.classList.add('is-visible');
+        if (openBtn) openBtn.hidden = true;
+        setExpanded(true);
+      }
+
       function hide() {
         const { root } = els();
-        root?.classList.remove('is-visible', 'is-expanded');
+        root?.classList.remove('is-visible', 'is-expanded', 'is-busy');
         expanded = false;
         busy = false;
         openProjectId = null;
+        activeProjectId = null;
+        abortCtrl = null;
       }
 
       function isBusy() {
@@ -5064,13 +5125,19 @@
       }
 
       function bind() {
-        const { fab, collapseBtn, dismissBtn, openBtn } = els();
+        const { fab, collapseBtn, dismissBtn, openBtn, stopBtn } = els();
         fab?.addEventListener('click', () => setExpanded(!expanded));
         collapseBtn?.addEventListener('click', (e) => {
           e.stopPropagation();
           setExpanded(false);
         });
         dismissBtn?.addEventListener('click', () => hide());
+        stopBtn?.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!busy) return;
+          if (!confirm('确定停止当前课表生成？已生成的部分不会写入。')) return;
+          requestStop();
+        });
         openBtn?.addEventListener('click', () => {
           const id = openProjectId;
           hide();
@@ -5081,7 +5148,20 @@
         });
       }
 
-      return { start, progress, finishOk, finishError, hide, isBusy, bind, setExpanded };
+      return {
+        start,
+        progress,
+        finishOk,
+        finishError,
+        finishCancelled,
+        hide,
+        isBusy,
+        bind,
+        setExpanded,
+        getSignal,
+        getActiveProjectId,
+        requestStop,
+      };
     })();
 
     function setGenProgress(msg, pct) {
@@ -5090,29 +5170,33 @@
 
     async function runAiPackGeneration(project) {
       if (GenDock.isBusy()) {
-        alert('已有任务在生成中，请稍候完成后再试。');
+        alert('已有任务在生成中，请稍候完成后再试。也可先点「停止生成」。');
         GenDock.setExpanded(true);
         return;
       }
-      GenDock.start(`准备「${project.title || '学习路径'}」`);
+      GenDock.start(`准备「${project.title || '学习路径'}」`, project.id);
       try {
         if (!AiReview.hasApiKey()) {
           throw Object.assign(new Error('请先开启智能功能（「更多」→「开启智能功能」）'), { code: 'NO_KEY' });
         }
         const searchReady = typeof HotFeed !== 'undefined' && HotFeed.hasSearchKey?.();
         if (!searchReady) {
-          setGenProgress('未配置搜索密钥：资料将主要靠模型（建议在「开启智能功能」里填博查/Tavily）…', 3);
+          setGenProgress('未启用联网搜索：资料将主要靠模型（建议在「开启智能功能」里填 DeepSeek）…', 3);
         } else {
           setGenProgress('已启用联网搜索，开始生成…', 3);
         }
-        const pack = await PackGenerator.generate({
-          title: project.title,
-          industry: project.industry,
-          role: project.role,
-          goal: project.goal || '校招',
-          days: project.days || 30,
-          notes: project.notes || '',
-        }, setGenProgress);
+        const pack = await PackGenerator.generate(
+          {
+            title: project.title,
+            industry: project.industry,
+            role: project.role,
+            goal: project.goal || '入门',
+            days: project.days || 30,
+            notes: project.notes || '',
+          },
+          setGenProgress,
+          { signal: GenDock.getSignal() }
+        );
         ProjectPlatform.update(project.id, {
           packId: pack.id,
           packStatus: 'ready',
@@ -5126,6 +5210,12 @@
         });
       } catch (err) {
         console.error(err);
+        if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
+          ProjectPlatform.update(project.id, { packStatus: 'cancelled' });
+          renderProjectsHome();
+          GenDock.finishCancelled('已停止生成。可点路径上的「重新生成」再试。');
+          return;
+        }
         ProjectPlatform.update(project.id, { packStatus: 'failed' });
         renderProjectsHome();
         GenDock.finishError('生成失败：' + (err.message || '未知错误'));
@@ -5147,17 +5237,19 @@
       const project = ProjectPlatform.get(projectId);
       if (!project?.packId) return;
       if (GenDock.isBusy()) {
-        alert('已有任务在生成中，请稍候完成后再试。');
+        alert('已有任务在生成中，请稍候完成后再试。也可先点「停止生成」。');
         GenDock.setExpanded(true);
         return;
       }
-      GenDock.start('生成阅读与术语');
+      GenDock.start('生成阅读与术语', project.id);
       setGenProgress('准备生成阅读内容…', 2);
       try {
         if (!AiReview.hasApiKey()) {
           throw Object.assign(new Error('请先开启智能功能'), { code: 'NO_KEY' });
         }
-        await PackGenerator.generateHubForPack(project.packId, setGenProgress);
+        await PackGenerator.generateHubForPack(project.packId, setGenProgress, {
+          signal: GenDock.getSignal(),
+        });
         ProjectPlatform.update(project.id, { packStatus: 'ready' });
         renderProjectsHome();
         GenDock.finishOk({
@@ -5166,6 +5258,10 @@
         });
       } catch (err) {
         console.error(err);
+        if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
+          GenDock.finishCancelled('已停止生成阅读内容。');
+          return;
+        }
         GenDock.finishError('生成阅读内容失败：' + (err.message || '未知错误'));
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
@@ -5177,17 +5273,19 @@
       const project = ProjectPlatform.get(projectId);
       if (!project?.packId) return;
       if (GenDock.isBusy()) {
-        alert('已有任务在生成中，请稍候完成后再试。');
+        alert('已有任务在生成中，请稍候完成后再试。也可先点「停止生成」。');
         GenDock.setExpanded(true);
         return;
       }
-      GenDock.start('生成每日练习');
+      GenDock.start('生成每日练习', project.id);
       setGenProgress('准备生成每日练习…', 2);
       try {
         if (!AiReview.hasApiKey()) {
           throw Object.assign(new Error('请先开启智能功能'), { code: 'NO_KEY' });
         }
-        await PackGenerator.generateDayMaterialsForPack(project.packId, setGenProgress);
+        await PackGenerator.generateDayMaterialsForPack(project.packId, setGenProgress, {
+          signal: GenDock.getSignal(),
+        });
         ProjectPlatform.update(project.id, { packStatus: 'ready' });
         renderProjectsHome();
         GenDock.finishOk({
@@ -5196,6 +5294,10 @@
         });
       } catch (err) {
         console.error(err);
+        if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
+          GenDock.finishCancelled('已停止生成每日练习。');
+          return;
+        }
         GenDock.finishError('生成每日练习失败：' + (err.message || '未知错误'));
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
@@ -5325,7 +5427,7 @@
         document.getElementById('create-industry').value = '';
         document.getElementById('create-role').value = '';
         document.getElementById('create-notes').value = '';
-        document.getElementById('create-goal').value = '校招';
+        document.getElementById('create-goal').value = '入门';
         document.getElementById('create-days').value = '30';
         refreshCreateAiStatus();
         document.getElementById('create-project-modal').classList.add('open');
@@ -5356,6 +5458,19 @@
           e.preventDefault();
           e.stopPropagation();
           retryGeneratePack(retry.getAttribute('data-retry-project'));
+          return;
+        }
+        const stopGen = e.target.closest('[data-stop-project]');
+        if (stopGen) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!GenDock.isBusy()) {
+            alert('当前没有正在进行的生成任务。');
+            return;
+          }
+          if (!confirm('确定停止当前课表生成？')) return;
+          GenDock.requestStop();
+          GenDock.setExpanded(true);
           return;
         }
         const hubFill = e.target.closest('[data-hub-project]');
@@ -5393,8 +5508,8 @@
         const title = document.getElementById('create-title').value;
         const industry = document.getElementById('create-industry').value;
         const role = document.getElementById('create-role').value;
-        const goal = document.getElementById('create-goal')?.value || '校招';
-        const days = Number(document.getElementById('create-days')?.value || 90);
+        const goal = document.getElementById('create-goal')?.value || '入门';
+        const days = Number(document.getElementById('create-days')?.value || 30);
         const notes = document.getElementById('create-notes')?.value || '';
         try {
           if (!industry.trim() || !role.trim()) {
@@ -5418,6 +5533,11 @@
             packStatus: 'generating',
             packId: null,
           });
+          try {
+            localStorage.setItem('zhijing-last-project-id', project.id);
+          } catch {
+            /* ignore */
+          }
           document.getElementById('create-project-modal').classList.remove('open');
           renderProjectsHome();
           if (typeof MascotCompanion !== 'undefined') MascotCompanion.refresh(true);
@@ -5739,6 +5859,14 @@
         },
         getDeepseekKey: () => AiReview.getApiKey(),
         checkProxy: () => AiReview.checkProxy(),
+        getPathMeta: () =>
+          activeProject
+            ? {
+                industry: activeProject.industry || '',
+                role: activeProject.role || '',
+                title: activeProject.title || '',
+              }
+            : null,
       });
       sprintToolsMidApi = SprintToolsMid.init(() => appData, saveData, getTodayDayNum, goToDay);
       sprintToolsApi = SprintTools.init(() => appData, saveData, getTodayDayNum);

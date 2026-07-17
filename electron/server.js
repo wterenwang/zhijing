@@ -7,8 +7,7 @@ const fs = require('fs');
 const { URL } = require('url');
 
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
-const BOCHA_URL = 'https://api.bochaai.com/v1/web-search';
-const TAVILY_URL = 'https://api.tavily.com/search';
+const DEEPSEEK_ANTHROPIC_URL = 'https://api.deepseek.com/anthropic/v1/messages';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -108,51 +107,91 @@ async function proxyDeepseek(payload) {
   return data;
 }
 
-async function searchBocha(apiKey, query, count) {
-  const res = await fetch(BOCHA_URL, {
+function extractAnthropicWebResults(data) {
+  const items = [];
+  const content = Array.isArray(data?.content) ? data.content : [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'web_search_tool_result') {
+      const payload = block.content;
+      if (Array.isArray(payload)) {
+        for (const hit of payload) {
+          if (!hit || typeof hit !== 'object') continue;
+          if (hit.type && hit.type !== 'web_search_result') continue;
+          items.push({
+            url: hit.url || '',
+            title: hit.title || hit.url || '',
+            snippet: hit.page_age || hit.snippet || hit.summary || '',
+          });
+        }
+      } else if (payload && typeof payload === 'object' && payload.url) {
+        items.push(payload);
+      }
+    }
+    for (const cite of block.citations || []) {
+      if (!cite || typeof cite !== 'object') continue;
+      if (cite.type === 'web_search_result_location' || cite.url) {
+        items.push({
+          url: cite.url || '',
+          title: cite.title || cite.url || '',
+          snippet: cite.cited_text || '',
+        });
+      }
+    }
+  }
+  return normalizeResults(items);
+}
+
+async function searchDeepseek(apiKey, query, count) {
+  const res = await fetch(DEEPSEEK_ANTHROPIC_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      query,
-      summary: true,
-      freshness: 'oneWeek',
-      count,
+      model: 'deepseek-chat',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content:
+            'You must use the web_search tool now. ' +
+            'Find high-quality educational web pages (tutorials, official docs, ' +
+            'encyclopedias, lectures) about the following topic. ' +
+            `Search query: ${query}\n` +
+            'Prefer Chinese sources when the query is Chinese. ' +
+            'Do not answer from memory; search first.',
+        },
+      ],
+      tools: [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          max_uses: 3,
+        },
+      ],
     }),
   });
-  const data = await res.json();
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { error: { message: text || res.statusText } };
+  }
   if (!res.ok) {
-    const msg = data?.error?.message || data?.message || JSON.stringify(data);
+    const msg =
+      data?.error?.message ||
+      (typeof data?.error === 'string' ? data.error : null) ||
+      text ||
+      res.statusText;
     const err = new Error(`搜索上游错误：${msg}`);
     err.status = res.status;
     throw err;
   }
-  const pages = data?.data?.webPages || data?.webPages || {};
-  return normalizeResults(pages.value || []);
-}
-
-async function searchTavily(apiKey, query, count) {
-  const res = await fetch(TAVILY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      api_key: apiKey,
-      query,
-      search_depth: 'basic',
-      max_results: count,
-      include_answer: false,
-    }),
-  });
-  const data = await res.json();
-  if (!res.ok) {
-    const msg = data?.error || data?.message || JSON.stringify(data);
-    const err = new Error(`搜索上游错误：${msg}`);
-    err.status = res.status;
-    throw err;
-  }
-  return normalizeResults(data.results || []);
+  return extractAnthropicWebResults(data).slice(0, count);
 }
 
 function safeJoin(root, urlPath) {
@@ -203,24 +242,20 @@ function createServer(rootDir, port) {
         try {
           const payload = await readJson(req);
           const apiKey = String(payload.apiKey || '').trim();
-          const provider = String(payload.provider || 'bocha').trim().toLowerCase();
           const query = String(payload.query || '').trim();
           let count = Number(payload.count) || 18;
           count = Math.max(1, Math.min(50, count));
           if (!apiKey) {
-            sendJson(res, 400, { error: { message: '缺少搜索 API Key' } });
+            sendJson(res, 400, { error: { message: '缺少 DeepSeek API Key' } });
             return;
           }
           if (!query) {
             sendJson(res, 400, { error: { message: '缺少搜索 query' } });
             return;
           }
-          const results =
-            provider === 'tavily'
-              ? await searchTavily(apiKey, query, count)
-              : await searchBocha(apiKey, query, count);
+          const results = await searchDeepseek(apiKey, query, count);
           sendJson(res, 200, {
-            provider: provider === 'tavily' ? 'tavily' : 'bocha',
+            provider: 'deepseek',
             query,
             results,
           });
