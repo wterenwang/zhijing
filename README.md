@@ -65,7 +65,7 @@
 ## 🚀 怎么开始（大约 3 分钟）
 
 1. 前往 [下载页](https://github.com/wterenwang/zhijing/releases/latest)，选择你的系统  
-   - **Windows（x64）**：`知径-Setup-….exe`（安装后从桌面 / 开始菜单打开）  
+   - **Windows（x64）**：`Zhijing-Setup-….exe`（安装后从桌面 / 开始菜单打开）  
    - **Mac（Apple 芯片）**：`.dmg` 或 `.zip`
 2. 安装后打开 **「知径」**
 3. 跟着径径走完引导 → 按提示配置 DeepSeek（可选）→ **新建路径**，开始正式学习
