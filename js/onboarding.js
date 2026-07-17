@@ -169,12 +169,12 @@ const OnboardingGuide = (() => {
     {
       id: 'create',
       title: '该建自己的路径了',
-      say: '样例流程你已经走过一遍。真正要学的岗位，请新建一条专属路径。',
+      say: '样例流程你已经走过一遍。真正要学的岗位，请新建路径生成专属课表。',
       body: `默认课表<strong>只展示用法</strong>；自己的路径才是主线。<br>
         <ol class="onb-steps">
           <li>回首页点「新建路径」</li>
           <li>填行业 / 岗位（与天数）</li>
-          <li>需要时再勾选用智能功能生成专属课表</li>
+          <li>若尚未配置密钥，按提示开启后再生成课表</li>
         </ol>
         <button type="button" class="btn-primary onb-api-btn" data-onb-open-create>去新建路径</button>`,
       pose: 'cheer',
@@ -505,8 +505,12 @@ const OnboardingGuide = (() => {
     document.querySelectorAll('[data-open-onboarding]').forEach((btn) => {
       btn.addEventListener('click', () => open(true));
     });
+    // 「如何配置 API」只打开设置面板，不进入径径新人导览
     document.querySelectorAll('[data-open-onboarding-api]').forEach((btn) => {
-      btn.addEventListener('click', () => openApiStep());
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        openApiSettings();
+      });
     });
   }
 

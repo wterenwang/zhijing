@@ -11,7 +11,9 @@
  * - Retrieval practice + spacing（Karpicke 等）：术语闪卡短定义；练习闭卷提取
  *
  * 七板块均拆为「分析/清单 → 结构设计 → 内容展开」小流程，逼模型写深、写多。
- * 联网：复用 HotFeed 的搜索 Key / `/api/search`（博查·Tavily），在资料/术语/章节等处注入 search_results。
+ * 联网：复用 HotFeed 的搜索 Key / `/api/search`（博查·Tavily）。
+ * 资料质量门禁（不新增 API）：query 教学改写、资讯域名黑名单、原标题强制、
+ * 意图匹配复查；不合格则降级为维基/B站/Google 搜索页。
  *
  * 知识库（每日微课，对齐课表一天一章）：
  * - Microlearning：一单元一目标（Alpha Learning / Udemy L&D）
@@ -217,7 +219,34 @@ const PackGenerator = (() => {
     return parseJsonLoose(text);
   }
 
-  // ─── 联网搜索（复用「开启智能功能」里的搜索 Key） ───
+  // ─── 联网搜索（复用「开启智能功能」里的搜索 Key；不新增第三方 API） ───
+
+  /** 域名加权：同一搜索 API 内优先高质量学习源 */
+  const RESOURCE_HOST_BOOST = [
+    { host: 'wikipedia.org', score: 40 },
+    { host: 'zh.wikipedia.org', score: 40 },
+    { host: 'bilibili.com', score: 28 },
+    { host: 'github.com', score: 26 },
+    { host: 'investopedia.com', score: 30 },
+    { host: 'khanacademy.org', score: 28 },
+    { host: 'coursera.org', score: 22 },
+    { host: 'edx.org', score: 22 },
+    { host: 'notion.site', score: 12 },
+    { host: 'notion.so', score: 12 },
+    { host: 'ssrn.com', score: 20 },
+    { host: 'arxiv.org', score: 24 },
+    { host: 'gov.cn', score: 18 },
+    { host: 'oecd.org', score: 18 },
+    { host: 'imf.org', score: 18 },
+    { host: 'sec.gov', score: 22 },
+    { host: 'microsoft.com', score: 14 },
+    { host: 'google.com/search', score: 8 },
+  ];
+
+  const NEWSY_TITLE_RE =
+    /跳第|排名|营收首超|今日热点|刚刚发布|突发|股价|涨停|跌停|汽车报价|试驾|导购|热搜|吃瓜/;
+  const LEARNING_HINT_RE =
+    /教程|讲解|方法|入门|指南|how\s*to|guide|textbook|文档|手册|模板|模型|定义|原理|课程|笔记|pdf|白皮书|实践|实操|步骤|搭建|公式|框架/i;
 
   function hasSearchKey() {
     if (typeof HotFeed !== 'undefined' && typeof HotFeed.hasSearchKey === 'function') {
@@ -235,6 +264,182 @@ const PackGenerator = (() => {
       url: String(r?.url || '').trim(),
       snippet: String(r?.snippet || r?.content || r?.summary || '').slice(0, 280),
     };
+  }
+
+  function hostnameOf(url) {
+    try {
+      return new URL(String(url)).hostname.replace(/^www\./i, '').toLowerCase();
+    } catch {
+      return '';
+    }
+  }
+
+  function isBlockedResourceUrl(url) {
+    const host = hostnameOf(url);
+    if (!host) return true;
+    const full = String(url || '').toLowerCase();
+    const blockedHosts = [
+      'yoojia.com',
+      'youjia.com',
+      'autohome.com.cn',
+      'pcauto.com.cn',
+      'dongchedi.com',
+      'ixigua.com',
+      'toutiao.com',
+      '36kr.com',
+      'huxiu.com',
+      'jiemian.com',
+      'thepaper.cn',
+      'cls.cn',
+      'xueqiu.com',
+      'eastmoney.com',
+      'yiche.com',
+      'cheshi.com',
+      'ifeng.com',
+      'sohu.com',
+    ];
+    if (blockedHosts.some((b) => host === b || host.endsWith(`.${b}`))) return true;
+    // 门户资讯频道
+    if (
+      /(^|\.)(sina|163|qq)\.com$/i.test(host) &&
+      /\/(news|finance|auto|stock|mil|ent)\b/i.test(full)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function domainBoostScore(url) {
+    const host = hostnameOf(url);
+    const full = String(url || '').toLowerCase();
+    let score = 0;
+    for (const row of RESOURCE_HOST_BOOST) {
+      if (host === row.host || host.endsWith(`.${row.host}`) || full.includes(row.host)) {
+        score = Math.max(score, row.score);
+      }
+    }
+    if (/\.(edu|ac)\.[a-z]{2,}$/i.test(host) || host.endsWith('.edu')) score = Math.max(score, 24);
+    if (host.endsWith('.gov.cn') || host.endsWith('.gov')) score = Math.max(score, 20);
+    return score;
+  }
+
+  function tokenizeIntent(text) {
+    const raw = String(text || '')
+      .toLowerCase()
+      .replace(/[^\u4e00-\u9fff a-z0-9]+/gi, ' ');
+    const parts = raw.split(/\s+/).filter(Boolean);
+    const out = [];
+    for (const p of parts) {
+      if (/^[a-z]{2,}$/i.test(p) || /^\d{2,}$/.test(p)) out.push(p);
+      else if (p.length >= 2) {
+        out.push(p);
+        // 中文 2-gram
+        if (/[\u4e00-\u9fff]/.test(p)) {
+          for (let i = 0; i < p.length - 1; i++) out.push(p.slice(i, i + 2));
+        }
+      }
+    }
+    return [...new Set(out)].filter((t) => t.length >= 2).slice(0, 24);
+  }
+
+  function hitLooksLikeNews(hit) {
+    const blob = `${hit?.title || ''} ${hit?.snippet || ''}`;
+    if (NEWSY_TITLE_RE.test(blob)) return true;
+    if (LEARNING_HINT_RE.test(blob)) return false;
+    // 无学习信号且像资讯标题
+    return /第\d+|同比|环比|百分点|上市|融资/.test(blob) && !/模型|教程|方法|公式|框架/.test(blob);
+  }
+
+  /**
+   * 搜索原标题/摘要是否覆盖学习意图（防止「教程标题 + 资讯 URL」）
+   */
+  function hitMatchesLearningIntent(hit, learnWhat, topic) {
+    const blob = `${hit?.title || ''} ${hit?.snippet || ''}`.toLowerCase();
+    if (!blob.trim()) return false;
+    const intentText = `${learnWhat || ''} ${topic || ''}`;
+    const methodTokens = tokenizeIntent(intentText).filter((t) => {
+      // 去掉过泛的单字公司碎片；保留方法/概念词与英文缩写
+      if (/^(公司|企业|行业|今天|学习|内容)$/.test(t)) return false;
+      return true;
+    });
+    const teachingIntent = LEARNING_HINT_RE.test(intentText) || /模型|框架|公式|三表|估值|现金流|dcf|wacc|excel/i.test(intentText);
+
+    if (hitLooksLikeNews(hit)) {
+      // 资讯站风格：必须本身像教程，或命中明确方法词（不能只靠公司名）
+      if (!LEARNING_HINT_RE.test(blob)) {
+        const methodHit = methodTokens.filter((t) =>
+          /模型|框架|公式|三表|估值|教程|方法|现金流|dcf|wacc|联动|建模|excel|模板/i.test(t)
+        );
+        if (!methodHit.some((t) => blob.includes(String(t).toLowerCase()))) return false;
+      }
+    }
+
+    if (!methodTokens.length) return LEARNING_HINT_RE.test(blob);
+    let hits = 0;
+    for (const t of methodTokens) {
+      if (blob.includes(String(t).toLowerCase())) hits += 1;
+    }
+    const need = methodTokens.length <= 3 ? 1 : Math.min(3, Math.ceil(methodTokens.length * 0.25));
+    if (hits < need) return false;
+    // 有教学意图时，正文也要有一点「可学」信号，避免纯热点新闻
+    if (teachingIntent && !LEARNING_HINT_RE.test(blob) && !/模型|框架|公式|定义|步骤|方法|教程|模板/i.test(blob)) {
+      return false;
+    }
+    return true;
+  }
+
+  function scoreSearchHit(hit, learnWhat, topic) {
+    if (!hit?.url || isBlockedResourceUrl(hit.url)) return -999;
+    let score = domainBoostScore(hit.url);
+    const blob = `${hit.title || ''} ${hit.snippet || ''}`;
+    if (LEARNING_HINT_RE.test(blob)) score += 18;
+    if (hitLooksLikeNews(hit)) score -= 35;
+    if (hitMatchesLearningIntent(hit, learnWhat, topic)) score += 22;
+    else score -= 20;
+    return score;
+  }
+
+  /** 过滤资讯站 + 按学习相关度排序（不新增 API） */
+  function rankAndFilterSearchHits(hits, { learnWhat = '', topic = '' } = {}) {
+    return (hits || [])
+      .map((h) => ({ ...h, _score: scoreSearchHit(h, learnWhat, topic) }))
+      .filter((h) => h._score > -50)
+      .sort((a, b) => b._score - a._score)
+      .map(({ _score, ...rest }) => rest);
+  }
+
+  /**
+   * 同一搜索 Key 下改写 query：加教学意图词 + 可选 site 限定
+   */
+  function expandLearningQueries(rawQuery, { prefer = '', learnWhat = '', topic = '' } = {}) {
+    const base = String(rawQuery || learnWhat || topic || '').trim();
+    if (!base) return [];
+    const pref = String(prefer || '').toLowerCase();
+    const teaching = `${base} 教程 方法 讲解`.replace(/\s+/g, ' ').trim();
+    const out = [];
+    const push = (q) => {
+      const s = String(q || '').trim();
+      if (s && !out.includes(s)) out.push(s);
+    };
+    push(teaching);
+    push(`${base} 入门 指南`);
+    if (pref.includes('wiki') || pref.includes('百科')) {
+      push(`${base} site:zh.wikipedia.org`);
+      push(`${base} site:wikipedia.org`);
+    }
+    if (pref.includes('video') || pref.includes('视频')) {
+      push(`${base} 教程 site:bilibili.com`);
+    }
+    if (pref.includes('official') || pref.includes('文档')) {
+      push(`${base} 官方 文档`);
+    }
+    if (pref.includes('paper')) {
+      push(`${base} PDF 讲义 OR 教材`);
+    }
+    // 默认再补一路百科/B站限定，提高高质量召回（仍走原搜索 API）
+    if (!pref.includes('wiki')) push(`${base} 定义 site:zh.wikipedia.org`);
+    if (!pref.includes('video')) push(`${base} 讲解 site:bilibili.com`);
+    return out.slice(0, 4);
   }
 
   /**
@@ -269,7 +474,7 @@ const PackGenerator = (() => {
       }
       const results = (Array.isArray(data.results) ? data.results : [])
         .map(slimSearchHit)
-        .filter((r) => r.url && /^https?:\/\//i.test(r.url));
+        .filter((r) => r.url && /^https?:\/\//i.test(r.url) && !isBlockedResourceUrl(r.url));
       const out = results.length >= minResults ? results : results;
       _searchCache.set(cacheKey, out);
       return out;
@@ -311,37 +516,46 @@ const PackGenerator = (() => {
     return JSON.stringify(rows, null, 0);
   }
 
-  function filterResourcesToSearch(resources, searchResults, typeHint = 'article') {
+  /**
+   * 只保留：URL∈搜索结果、非黑名单、学习意图匹配；
+   * 展示标题强制用搜索原标题，禁止模型美化成「假教程名」。
+   */
+  function filterResourcesToSearch(resources, searchResults, typeHint = 'article', ctx = {}) {
     const allowed = new Set(['article', 'video', 'report', 'tool']);
-    const urlSet = new Set((searchResults || []).map((r) => r.url));
-    const byUrl = new Map((searchResults || []).map((r) => [r.url, r]));
-    let picked = (resources || [])
-      .map((r) => ({
-        title: String(r.title || '').trim().slice(0, 80),
-        url: String(r.url || '').trim(),
-        type: allowed.has(String(r.type)) ? String(r.type) : typeHint,
-      }))
-      .filter((r) => r.title && r.url && urlSet.has(r.url));
+    const learnWhat = ctx.learnWhat || '';
+    const topic = ctx.topic || '';
+    const ranked = rankAndFilterSearchHits(searchResults, { learnWhat, topic });
+    const byUrl = new Map(ranked.map((r) => [r.url, r]));
 
-    if (picked.length < 2 && searchResults?.length) {
-      const extra = searchResults
+    let picked = (resources || [])
+      .map((r) => {
+        const url = String(r.url || '').trim();
+        const hit = byUrl.get(url);
+        if (!hit || isBlockedResourceUrl(url)) return null;
+        if (!hitMatchesLearningIntent(hit, learnWhat, topic) && scoreSearchHit(hit, learnWhat, topic) < 10) {
+          return null;
+        }
+        return {
+          title: String(hit.title || r.title || '').trim().slice(0, 80),
+          url,
+          type: allowed.has(String(r.type)) ? String(r.type) : typeHint,
+        };
+      })
+      .filter((r) => r && r.title && r.url);
+
+    if (picked.length < 2 && ranked.length) {
+      const extra = ranked
         .filter((r) => !picked.some((p) => p.url === r.url))
+        .filter((r) => hitMatchesLearningIntent(r, learnWhat, topic) || scoreSearchHit(r, learnWhat, topic) >= 15)
         .slice(0, 3 - picked.length)
         .map((r) => ({
-          title: (r.title || r.snippet || '参考资料').slice(0, 80),
+          title: String(r.title || '参考资料').slice(0, 80),
           url: r.url,
           type: typeHint,
         }));
       picked = picked.concat(extra);
     }
-    // 标题可用来自搜索结果补全
-    picked = picked.map((r) => {
-      const hit = byUrl.get(r.url);
-      if (hit && (!r.title || r.title.length < 4)) {
-        return { ...r, title: hit.title.slice(0, 80) };
-      }
-      return r;
-    });
+
     return picked.slice(0, 4);
   }
 
@@ -1353,21 +1567,21 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
 
   function fallbackDayResources(meta, dayPlan) {
     const topic = String(dayPlan.topic || meta.industry || '学习');
-    const q = encodeURIComponent(`${meta.industry || ''} ${topic}`.trim());
-    const t = encodeURIComponent(topic);
+    const q = encodeURIComponent(`${meta.industry || ''} ${topic} 教程`.trim());
+    const t = encodeURIComponent(`${topic} 教程`);
     return [
       {
-        title: `维基百科搜索：${topic}`,
+        title: `维基百科搜索：${topic}（请自选词条）`,
         url: `https://zh.wikipedia.org/wiki/Special:Search?search=${t}`,
         type: 'article',
       },
       {
-        title: `B站搜索：${topic}`,
+        title: `B站搜索：${topic}讲解（请自选视频）`,
         url: `https://search.bilibili.com/all?keyword=${t}`,
         type: 'video',
       },
       {
-        title: `网页搜索：${meta.industry} ${topic}`,
+        title: `网页搜索：${meta.industry || ''} ${topic} 教程`,
         url: `https://www.google.com/search?q=${q}`,
         type: 'article',
       },
@@ -1404,8 +1618,9 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
         url: String(r.url || '').trim(),
         type: ALLOWED_RESOURCE_TYPES.has(String(r.type)) ? String(r.type) : 'article',
       }))
-      .filter((r) => r.title && isSafeHttpUrl(r.url))
+      .filter((r) => r.title && isSafeHttpUrl(r.url) && !isBlockedResourceUrl(r.url))
       .slice(0, 4);
+    // 合格直链不足：降级为百科/B站/网页搜索页（诚实、不货不对板）
     if (resources.length < 2) {
       resources = fallbackDayResources(meta, dayPlan);
     }
@@ -1454,8 +1669,12 @@ ${JSON.stringify(slim)}
 
 ## Task
 为每天输出 2-3 条资源意图（尚无 URL）：
-[{"day":1,"intents":[{"learnWhat":"具体学什么","query":"中文搜索词","prefer":"wiki|official|video|paper|news","type":"article|video|report|tool"}]}]
-要求：learnWhat 对应今日 topic 的领域对象；query 可直接用于搜索；禁止「入门教程」空意图。`;
+[{"day":1,"intents":[{"learnWhat":"具体学什么（方法/概念/步骤）","query":"含教程或方法的中文搜索词","prefer":"wiki|official|video|paper","type":"article|video|report|tool"}]}]
+要求：
+- learnWhat 对应今日 topic 的可学对象（方法、框架、步骤），不要写成新闻事件
+- query 必须带「教程/方法/讲解/定义/文档」之一；禁止只用公司名+热点词裸搜
+- prefer 禁止 news；学习资料不要指向资讯站
+- 禁止空泛「入门教程」意图`;
     return chatJson({ system, user, max_tokens: 3200 });
   }
 
@@ -1465,24 +1684,38 @@ ${JSON.stringify(slim)}
    */
   async function curateDayResourceLinks(meta, planSlice, intents, onProgress) {
     const searchByDay = new Map();
+    const dayMeta = new Map();
     const dayJobs = (planSlice || []).map((dayPlan) => {
       const day = dayPlan.day;
       const intentRow = (intents || []).find((x) => Number(x.day) === day);
-      const intentQueries = (intentRow?.intents || [])
-        .map((it) => String(it.query || '').trim())
-        .filter(Boolean)
-        .slice(0, 2);
-      const queries = intentQueries.length
-        ? intentQueries
-        : [`${meta.industry} ${dayPlan.topic || ''}`.trim()];
-      return { dayPlan, day, queries };
+      const intentList = intentRow?.intents || [];
+      const learnWhat = intentList.map((it) => it.learnWhat || '').filter(Boolean).join('；');
+      const queries = [];
+      intentList.slice(0, 3).forEach((it) => {
+        expandLearningQueries(it.query || it.learnWhat || dayPlan.topic, {
+          prefer: it.prefer || '',
+          learnWhat: it.learnWhat || '',
+          topic: dayPlan.topic || '',
+        }).forEach((q) => queries.push(q));
+      });
+      if (!queries.length) {
+        expandLearningQueries(`${meta.industry} ${dayPlan.topic || ''}`, {
+          topic: dayPlan.topic || '',
+        }).forEach((q) => queries.push(q));
+      }
+      dayMeta.set(day, { learnWhat, topic: dayPlan.topic || '', intents: intentList });
+      return { dayPlan, day, queries: queries.slice(0, 6), learnWhat };
     });
 
     const dayHits = await mapPool(
       dayJobs,
       SEARCH_CONCURRENCY,
-      async ({ dayPlan, day, queries }) => {
-        const hits = await searchMany(queries, { count: SEARCH_COUNT, maxQueries: 2 });
+      async ({ dayPlan, day, queries, learnWhat }) => {
+        const raw = await searchMany(queries, { count: SEARCH_COUNT, maxQueries: 4 });
+        const hits = rankAndFilterSearchHits(raw, {
+          learnWhat,
+          topic: dayPlan.topic || '',
+        }).slice(0, 12);
         return { day, topic: dayPlan.topic, hits };
       },
       (done, total) => {
@@ -1498,48 +1731,42 @@ ${JSON.stringify(slim)}
 
     const hasAny = allForPrompt.some((d) => d.search_results?.length);
     if (!hasAny) {
-      // 无搜索结果时退回模型策展（仍禁止瞎编直链）
-      const system = `你是高信任资料策展人。硬性规则：只输出 JSON 数组。禁止编造不存在的 PDF/报告直链；没把握用搜索页 URL。`;
-      const user = `## Audience
-${meta.industry} / ${meta.role}
-## 意图
-${JSON.stringify(intents).slice(0, 3500)}
-## Days
-${JSON.stringify(planSlice.map((d) => ({ day: d.day, topic: d.topic })))}
-## Task
-[{"day":1,"resources":[{"title":"","url":"https://...","type":"article|video|report|tool"}]}]
-每天 2-3 条。`;
-      const curated = await chatJson({ system, user, temperature: 0.25, max_tokens: 4000 });
-      const rows = Array.isArray(curated) ? curated : curated.days || curated.items || [];
+      // 无可用搜索结果：不让模型编直链，交由 normalize 降级为搜索页
+      const rows = planSlice.map((d) => ({ day: d.day, resources: [] }));
       return { rows, searchByDay };
     }
 
-    const system = `你是高信任资料策展人（FACTS_ONLY）。
+    const system = `你是高信任学习资料策展人（FACTS_ONLY）。
 硬性规则：只输出一个 JSON 数组。
-每条 resources[].url 必须精确复制自对应 day 的 search_results，禁止编造或改写 URL。`;
+1) resources[].url 必须精确复制自对应 day 的 search_results，禁止编造或改写 URL。
+2) resources[].title 必须精确复制该 url 在 search_results 中的原 title，禁止改写成「教程/步骤」美化标题。
+3) 只选能支撑「学方法/概念」的结果；不要选新闻、行情、汽车导购、社会热点。
+4) 若某天 search_results 都不合适，该天 resources 输出 []。`;
     const user = `## Audience
 ${meta.industry} / ${meta.role}
 
 ## 意图（学什么）
 ${JSON.stringify(intents).slice(0, 2500)}
 
-## 按日 search_results（唯一合法链接来源）
+## 按日 search_results（唯一合法链接与标题来源）
 ${JSON.stringify(allForPrompt).slice(0, 12000)}
 
 ## Task
-[{"day":1,"resources":[{"title":"学什么：…","url":"必须来自该日 search_results","type":"article|video|report|tool"}]}]
-要求：每天 2-3 条；title 说明学什么；优先官方/百科/高质量来源；覆盖每一天。`;
-    const curated = await chatJson({ system, user, temperature: 0.2, max_tokens: 4000 });
+[{"day":1,"resources":[{"title":"必须=search_results原标题","url":"必须来自该日 search_results","type":"article|video|report|tool"}]}]
+要求：每天 0-3 条；宁缺毋滥；优先百科/官方/视频教程/高质量文档。`;
+    const curated = await chatJson({ system, user, temperature: 0.15, max_tokens: 4000 });
     let rows = Array.isArray(curated) ? curated : curated.days || curated.items || [];
 
-    // 服务端校验：URL 必须落在搜索结果中，不足则用搜索 hit 补齐
+    // 校验：URL∈搜索、标题用原文、意图匹配；不足则空数组 → normalize 降级
     rows = planSlice.map((d) => {
       const row = rows.find((r) => Number(r.day) === d.day) || { day: d.day, resources: [] };
       const hits = searchByDay.get(d.day) || [];
-      return {
-        day: d.day,
-        resources: filterResourcesToSearch(row.resources || [], hits, 'article'),
-      };
+      const metaDay = dayMeta.get(d.day) || {};
+      const resources = filterResourcesToSearch(row.resources || [], hits, 'article', {
+        learnWhat: metaDay.learnWhat || '',
+        topic: metaDay.topic || d.topic || '',
+      });
+      return { day: d.day, resources };
     });
 
     return { rows, searchByDay };

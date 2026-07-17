@@ -1502,6 +1502,36 @@
       color: var(--text-muted);
       line-height: 1.45;
     }
+    .create-ai-panel {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border-glass);
+      background: rgba(8, 145, 178, 0.04);
+    }
+    .create-ai-panel.is-need {
+      border-color: rgba(245, 158, 11, 0.45);
+      background: rgba(245, 158, 11, 0.08);
+    }
+    .create-ai-panel-title {
+      margin: 0 0 4px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.35;
+    }
+    .create-ai-panel-desc {
+      margin: 0;
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+    .create-ai-panel .btn-secondary {
+      margin-top: 10px;
+      font-size: 0.8rem;
+      padding: 6px 12px;
+    }
+    .create-ai-panel[hidden] { display: none !important; }
 
     .top-nav button:hover { color: var(--accent-cyan); background: rgba(8, 145, 178, 0.06); }
 
@@ -3662,7 +3692,6 @@
         <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer">DeepSeek</a>
         · <a href="https://open.bochaai.com/" target="_blank" rel="noopener noreferrer">博查</a>
         · <a href="https://tavily.com/" target="_blank" rel="noopener noreferrer">Tavily</a>
-        · 也可先看 <button type="button" class="linkish" data-open-onboarding-api style="font:inherit;color:var(--accent-cyan);background:none;border:none;padding:0;cursor:pointer;text-decoration:underline">配置步骤说明</button>
       </p>
       <div class="modal-actions">
         <button class="btn-secondary" id="ai-key-clear">清除密钥</button>
@@ -3722,17 +3751,18 @@
         </div>
         <label for="create-notes">备注（可选）</label>
         <input id="create-notes" type="text" placeholder="例如：侧重 B 端协作 / 偏增长" maxlength="80" />
-        <label class="create-mode" style="display:flex;align-items:flex-start;gap:8px;margin-top:14px;cursor:pointer">
-          <input type="checkbox" id="create-use-ai" style="margin-top:3px" />
-          <span style="font-size:0.82rem;color:var(--text-secondary);line-height:1.4">
-            <strong style="color:var(--text-primary)">用智能功能生成专属课表</strong>（含阅读章节、练习与资料）。需先「开启智能功能」。若同时配置了<strong>搜索密钥</strong>（博查/Tavily），生成资料与章节时会联网查证，质量更好。不勾选则创建空路径，可稍后再生成。
-          </span>
-        </label>
-        <p class="form-tip">默认「产品经理 30 天入门」只是展示样例；请在这里创建属于你的岗位路径。</p>
+        <div class="create-ai-panel" id="create-ai-panel" hidden>
+          <p class="create-ai-panel-title" id="create-ai-title">需要先配置密钥</p>
+          <p class="create-ai-panel-desc" id="create-ai-desc">
+            专属课表（任务、章节、练习与资料）会按你的行业与岗位自动生成。请先开启智能功能并填入密钥后再创建。
+          </p>
+          <button type="button" class="btn-secondary" id="create-open-ai-settings">去配置密钥</button>
+        </div>
+        <p class="form-tip" id="create-form-tip">创建后会按行业/岗位生成专属课表（含每日任务、阅读与练习）。默认「产品经理 30 天入门」仅作展示样例。</p>
       </div>
       <div class="modal-actions">
         <button class="btn-secondary" id="create-project-cancel">取消</button>
-        <button class="btn-primary" id="create-project-confirm">创建并开始</button>
+        <button class="btn-primary" id="create-project-confirm">生成课表并开始</button>
       </div>
     </div>
   </div>
@@ -3770,12 +3800,12 @@
   <script src="js/hot-feed.js"></script>
   <script src="js/ai-review.js"></script>
   <script src="js/splash.js?v=20260716f"></script>
-  <script src="js/onboarding.js?v=20260717v9"></script>
+  <script src="js/onboarding.js?v=20260717v10"></script>
   <script src="js/spaced-repetition.js"></script>
   <script src="js/srs-ai.js"></script>
   <script src="js/sprint-tools.js"></script>
   <script src="js/sprint-tools-mid.js"></script>
-  <script src="js/mascot.js?v=20260717v6"></script>
+  <script src="js/mascot.js?v=20260717v7"></script>
   <script>
     // ============================================================
     // 90天学习计划数据（结构化）
@@ -5273,6 +5303,23 @@
         showProjectsHome();
       });
 
+      const refreshCreateAiStatus = () => {
+        const panel = document.getElementById('create-ai-panel');
+        const tip = document.getElementById('create-form-tip');
+        const btn = document.getElementById('create-project-confirm');
+        const ready = typeof AiReview !== 'undefined' && AiReview.hasApiKey();
+        if (panel) {
+          panel.hidden = ready;
+          panel.classList.toggle('is-need', !ready);
+        }
+        if (tip) {
+          tip.textContent = ready
+            ? '创建后会按行业/岗位生成专属课表（含每日任务、阅读与练习）。默认「产品经理 30 天入门」仅作展示样例。'
+            : '生成专属课表需要密钥。配置完成后即可创建。';
+        }
+        if (btn) btn.textContent = ready ? '生成课表并开始' : '先配置密钥';
+      };
+
       const openCreateModal = () => {
         document.getElementById('create-title').value = '';
         document.getElementById('create-industry').value = '';
@@ -5280,11 +5327,21 @@
         document.getElementById('create-notes').value = '';
         document.getElementById('create-goal').value = '校招';
         document.getElementById('create-days').value = '30';
-        document.getElementById('create-use-ai').checked = false;
+        refreshCreateAiStatus();
         document.getElementById('create-project-modal').classList.add('open');
         setTimeout(() => document.getElementById('create-title')?.focus(), 50);
       };
       document.getElementById('btn-create-project')?.addEventListener('click', openCreateModal);
+      document.getElementById('create-open-ai-settings')?.addEventListener('click', () => {
+        document.getElementById('create-project-modal').classList.remove('open');
+        AiReview.openSettingsModal?.();
+      });
+
+      // 从设置页返回后，若再次打开新建框可刷新状态；监听设置关闭时也刷新
+      document.getElementById('ai-key-modal')?.addEventListener('transitionend', refreshCreateAiStatus);
+      document.getElementById('ai-key-save')?.addEventListener('click', () => {
+        setTimeout(refreshCreateAiStatus, 100);
+      });
 
       document.getElementById('projects-grid')?.addEventListener('click', (e) => {
         const del = e.target.closest('[data-delete-project]');
@@ -5333,7 +5390,6 @@
         document.getElementById('create-project-modal').classList.remove('open');
       });
       document.getElementById('create-project-confirm')?.addEventListener('click', async () => {
-        const useAi = document.getElementById('create-use-ai')?.checked;
         const title = document.getElementById('create-title').value;
         const industry = document.getElementById('create-industry').value;
         const role = document.getElementById('create-role').value;
@@ -5341,17 +5397,15 @@
         const days = Number(document.getElementById('create-days')?.value || 90);
         const notes = document.getElementById('create-notes')?.value || '';
         try {
-          if (useAi) {
-            if (!industry.trim() || !role.trim()) {
-              alert('生成专属课表需要填写行业与岗位');
-              return;
-            }
-            if (!AiReview.hasApiKey()) {
-              document.getElementById('create-project-modal').classList.remove('open');
-              alert('请先开启智能功能');
-              AiReview.openSettingsModal?.();
-              return;
-            }
+          if (!industry.trim() || !role.trim()) {
+            alert('生成专属课表需要填写行业与岗位');
+            return;
+          }
+          if (!AiReview.hasApiKey()) {
+            alert('生成专属课表需要先配置密钥。请开启智能功能后再创建。');
+            document.getElementById('create-project-modal').classList.remove('open');
+            AiReview.openSettingsModal?.();
+            return;
           }
           const project = ProjectPlatform.create({
             title,
@@ -5360,32 +5414,15 @@
             goal,
             days,
             notes,
-            useAi: !!useAi,
-            packStatus: useAi ? 'generating' : 'ready',
-            packId: useAi ? null : (() => {
-              if (typeof ContentPack === 'undefined') return null;
-              const pack = ContentPack.emptyPack({
-                title: (title || '').trim(),
-                industry: (industry || '').trim(),
-                role: (role || '').trim(),
-                goal: goal || '校招',
-                days: days || 90,
-                notes: notes || '',
-              });
-              ContentPack.save(pack);
-              return pack.id;
-            })(),
+            useAi: true,
+            packStatus: 'generating',
+            packId: null,
           });
           document.getElementById('create-project-modal').classList.remove('open');
-          if (useAi) {
-            renderProjectsHome();
-            if (typeof MascotCompanion !== 'undefined') MascotCompanion.refresh(true);
-            // 后台生成：不挡操作；完成后右下角可打开路径
-            void runAiPackGeneration(project);
-          } else {
-            localStorage.setItem('zhijing-last-project-id', project.id);
-            enterProject(project.id);
-          }
+          renderProjectsHome();
+          if (typeof MascotCompanion !== 'undefined') MascotCompanion.refresh(true);
+          // 后台生成：不挡操作；完成后右下角可打开路径
+          void runAiPackGeneration(project);
         } catch (err) {
           alert(err.message || '创建失败');
         }

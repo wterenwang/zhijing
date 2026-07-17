@@ -13,3 +13,20 @@ __pycache__/
 *.db-shm
 *.db-wal
 .forge-data/
+
+# IDE / 本地助手（不进入公开仓库）
+.cursor/
+.vscode/
+.idea/
+
+# 内部产品文档（不随安装包/公开仓库分发）
+Product-Spec.md
+Product-Spec-CHANGELOG.md
+DEV-PLAN.md
+Design-Brief.md
+*-PRD.md
+PRD.md
+
+# 本地录屏/反馈素材
+*.mp4
+*.webm

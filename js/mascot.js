@@ -14,7 +14,7 @@ const MascotCompanion = (() => {
   const HOUR_GREETINGS = [
     { before: 6, text: '夜深了也别忘了歇一歇～明天再战！' },
     { before: 11, text: '早呀！今天的路径准备好了吗？' },
-    { before: 14, text: '中午好～学一会儿再吃，效率更高哦。' },
+    { before: 14, text: '中午好～先吃一会儿再学，别饿着肚子硬撑。' },
     { before: 18, text: '下午好！来完成今天的一小步吧。' },
     { before: 22, text: '晚上好！收工前打个卡？' },
     { before: 24, text: '这么晚还在？径径陪你收尾～' },
