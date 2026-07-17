@@ -3,7 +3,7 @@
  */
 const DEEPSEEK_KEY_STORAGE = 'embodied-pm-deepseek-key';
 
-const AI_REVIEW_SYSTEM = `你是具身智能产品经理学习教练。用户完成具身智能 PM 校招练习题后，需要「点评」和「参考答案」。
+const AI_REVIEW_SYSTEM = `你是产品经理学习教练。用户完成岗位学习路径中的练习题后，需要「点评」和「参考答案」。
 
 输出格式（Markdown，严格按此结构）：
 

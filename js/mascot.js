@@ -138,17 +138,23 @@ const MascotCompanion = (() => {
     return listUserProjects().length > 0;
   }
 
+  /** 尚无自建路径：默认课表仅展示，要催新建 */
+  function needsCreateNudge() {
+    return !hasUserPaths();
+  }
+
   function resolveFocusProject() {
     const projects = typeof ProjectPlatform !== 'undefined' ? ProjectPlatform.list() : [];
     if (!projects.length) return null;
-    // 还没有自建路径：不盯实例包，交给「去新建」引导
-    if (!hasUserPaths()) return null;
 
     const lastId = localStorage.getItem(LAST_OPEN_KEY);
     if (lastId) {
       const hit = projects.find((p) => p.id === lastId);
       if (hit) return hit;
     }
+    // 无自建路径时仍可盯默认展示课表，但文案会催新建
+    const sample = projects.find((p) => isBuiltinSample(p));
+    if (sample) return sample;
     const user = listUserProjects();
     return user[0] || projects[0];
   }
@@ -314,10 +320,8 @@ const MascotCompanion = (() => {
         kind: 'empty',
         project: null,
         messages: [
-          '还没有自己的路径哦～点「新建路径」，径径陪你一起定目标！',
-          '下面那份「产品经理入门」是示例课表，先创建一条属于你的路径吧～',
-          '填好行业和岗位，就能走出专属知径啦。',
-          '创建之后，径径才会开始盯你的练习和打卡哦～',
+          '还没有自己的路径哦～默认课表只是展示，点「新建路径」才是主线！',
+          '填行业和岗位，创建属于你的知径～径径陪你。',
         ],
         cta: { label: '新建路径', action: 'create' },
         checklist: null,
@@ -371,19 +375,27 @@ const MascotCompanion = (() => {
     const milestone = findMilestone(checked, total);
 
     if (checked === 0 && !checkinDone && practice.done === 0 && !feynmanDone) {
+      const createNudge = needsCreateNudge()
+        ? [
+            '提醒：默认课表只是展示样例，真正学习请「新建路径」。',
+            '可以先点开默认课表看一眼流程，然后马上创建自己的路径～',
+          ]
+        : [];
       return {
         kind: 'start',
         project,
         dayNum,
         messages: [
-          `「${name}」还没起步呢～今天就从第 ${dayNum} 天开始？`,
+          `「${name}」还是展示课表哦～想认真学，先新建自己的路径？`,
           hourGreeting(),
           topic
-            ? `今天主题是「${topic}」，一点点就好，径径陪你～`
-            : '一点点就好，径径陪你打开今天的任务！',
-          '先看练习 → 写复述 → 再打卡，节奏刚刚好。',
+            ? `展示主题是「${topic}」，点开可试用；主线请走自建路径。`
+            : '默认课表可试用界面；主线请点「新建路径」。',
+          ...createNudge,
         ],
-        cta: { label: '开始学习', projectId: project.id, focus: 'practice' },
+        cta: needsCreateNudge()
+          ? { label: '新建我的路径', action: 'create' }
+          : { label: '开始学习', projectId: project.id, focus: 'practice' },
         checklist,
         streak: 0,
       };
@@ -404,12 +416,20 @@ const MascotCompanion = (() => {
             : `进度冲到 ${milestone.value}% 了！太棒了！`
         );
       }
+      if (needsCreateNudge() && isBuiltinSample(project)) {
+        msgs.unshift(
+          '展示课表可以玩，但别停在这儿——点「新建路径」才是你的主线！'
+        );
+      }
       return {
         kind: 'all_done',
         project,
         dayNum,
         messages: msgs,
-        cta,
+        cta:
+          needsCreateNudge() && isBuiltinSample(project)
+            ? { label: '新建我的路径', action: 'create' }
+            : { label: '再看一眼', projectId: project.id, focus: 'sprint' },
         checklist,
         streak,
       };
@@ -430,6 +450,9 @@ const MascotCompanion = (() => {
       ];
       if (checkinDone) {
         msgs.unshift('打卡已经点过啦，但练习还没做完——补上更圆满哦！');
+      }
+      if (needsCreateNudge() && isBuiltinSample(project)) {
+        msgs.push('别忘了：默认课表只是展示，点「新建路径」才是主线～');
       }
       return {
         kind: 'practice',
@@ -519,7 +542,7 @@ const MascotCompanion = (() => {
     const imgs = poses
       .map(
         (pose) =>
-          `<img class="mascot-sprite" data-pose="${pose}" src="${ASSET}/jingjing-${pose}.png?v=20260716g" alt="" draggable="false">`
+          `<img class="mascot-sprite" data-pose="${pose}" src="${ASSET}/jingjing-${pose}.png?v=20260717b" alt="" draggable="false">`
       )
       .join('\n          ');
     return `
@@ -707,13 +730,11 @@ const MascotCompanion = (() => {
   }
 
   function buildIdleMessages(ctx) {
-    if (!hasUserPaths() || ctx?.kind === 'empty') {
+    if (!ctx?.project || ctx?.kind === 'empty') {
       return [
         { text: hourGreeting(), mood: greetingMood() },
-        { text: '还没有自己的路径呀～点「新建路径」，径径陪你定目标！', mood: 'shy' },
-        { text: '示例课表可以先逛逛，真正开练前先创建一条属于你的路径哦。', mood: 'read' },
-        { text: '创建好路径之后，我才会开始提醒练习和打卡～', mood: 'point' },
-        { text: '戳「今日任务」或「新建路径」，我们马上出发！', mood: 'wave' },
+        { text: '默认课表只是展示～快点「新建路径」！', mood: 'point' },
+        { text: '填行业和岗位，走出属于你的知径～', mood: 'wave' },
       ];
     }
     const lines = [{ text: hourGreeting(), mood: greetingMood() }, ...IDLE_CHATTER];
@@ -727,10 +748,13 @@ const MascotCompanion = (() => {
       lines.push({ text: '今天好像都齐了？给你比个心～', mood: 'cheer' });
     } else if (ctx?.kind === 'start') {
       lines.push({ text: '新的一天，要从哪一步开始呢？戳我我帮你列出来。', mood: 'stretch' });
-    } else if (ctx?.kind === 'empty') {
-      lines.push({ text: '还没有路径的话，先去新建一条吧～', mood: 'shy' });
     }
-    if (ctx?.project) {
+    if (needsCreateNudge()) {
+      lines.push({ text: '默认「产品经理入门」只是样例展示，别当终点哦。', mood: 'read' });
+      lines.push({ text: '正经学习：点「新建路径」，创建你自己的课表！', mood: 'point' });
+      lines.push({ text: '戳我 → 去新建路径，径径催你啦～', mood: 'wave' });
+    }
+    if (ctx?.project && hasUserPaths()) {
       const name = ctx.project.shortName || ctx.project.title;
       lines.push({ text: `「${name}」还在等你哦。`, mood: 'read' });
     }
@@ -767,9 +791,9 @@ const MascotCompanion = (() => {
       const openBtn = document.createElement('button');
       openBtn.type = 'button';
       openBtn.className = 'mascot-cta-primary';
-      if (!hasUserPaths()) {
-        openBtn.textContent = '新建路径';
-        openBtn.title = '创建一条属于你的学习路径';
+      if (!ctx?.project || needsCreateNudge()) {
+        openBtn.textContent = '新建我的路径';
+        openBtn.title = '默认课表仅展示，创建属于你的岗位路径';
         openBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           openCreatePath();
@@ -939,7 +963,8 @@ const MascotCompanion = (() => {
   }
 
   function onInteract() {
-    if (!hasUserPaths()) {
+    // 无自建路径：点击径径直接催新建（默认课表仅展示）
+    if (needsCreateNudge()) {
       openCreatePath();
       return;
     }

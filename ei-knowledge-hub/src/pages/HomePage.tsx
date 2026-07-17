@@ -33,7 +33,7 @@ export function HomePage() {
       <p className="text-slate-600 mb-8 leading-relaxed">
         {isRuntime
           ? `与专属课表配套${industry || role ? `（${[industry, role].filter(Boolean).join(' · ')}）` : ''}：按模块阅读章节，配合打卡页每日任务与费曼复述。`
-          : '与 90 天校招冲刺计划配套：每天任务卡片关联本章资料与外链；按「行业认知 → 技术基础 → 专项突破 → 作品集 → 面试」系统学习。'}
+          : '与打卡课表配套：按模块阅读章节，配合每日任务与费曼复述系统学习。'}
       </p>
 
       <section className="mb-10">

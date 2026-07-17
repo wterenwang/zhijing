@@ -50,8 +50,8 @@ const ContentPack = (() => {
         title: meta.title || '',
         industry: meta.industry || '',
         role: meta.role || '',
-        goal: meta.goal || '校招',
-        days: Number(meta.days) || 90,
+        goal: meta.goal || '入门',
+        days: Number(meta.days) || 30,
         notes: meta.notes || '',
       },
       plan: [],
@@ -85,6 +85,7 @@ const ContentPack = (() => {
     if (!project) {
       activeCustom = null;
       activeBuiltinId = BUILTIN_DEFAULT;
+      if (typeof Pm30Pack !== 'undefined') Pm30Pack.ensureHubSeeded?.();
       return { mode: 'builtin', pack: null, builtinId: activeBuiltinId };
     }
 
@@ -92,6 +93,9 @@ const ContentPack = (() => {
     if (builtinId) {
       activeCustom = null;
       activeBuiltinId = builtinId;
+      if (builtinId === BUILTIN_DEFAULT && typeof Pm30Pack !== 'undefined') {
+        Pm30Pack.ensureHubSeeded?.();
+      }
       return { mode: 'builtin', pack: null, builtinId };
     }
 
@@ -287,6 +291,9 @@ const ContentPack = (() => {
   }
 
   function getHub() {
+    if (activeBuiltinId === BUILTIN_DEFAULT && typeof Pm30Pack !== 'undefined') {
+      return Pm30Pack.getHub?.() || null;
+    }
     if (activeCustom?.hub?.navigation?.length) return activeCustom.hub;
     return null;
   }
@@ -294,10 +301,25 @@ const ContentPack = (() => {
   function hasHub() {
     // 具身内置知识库走 hub/ 静态站，不算 ContentPack.hub
     if (activeBuiltinId === BUILTIN_EMBODY) return true;
+    if (activeBuiltinId === BUILTIN_DEFAULT) return !!getHub()?.navigation?.length;
     return !!getHub();
   }
 
+  /** 默认路径知识库 iframe 需要 packId=pm-30-intro */
+  function getHubPackIdForIframe() {
+    if (activeBuiltinId === BUILTIN_DEFAULT) {
+      if (typeof Pm30Pack !== 'undefined') Pm30Pack.ensureHubSeeded?.();
+      return BUILTIN_DEFAULT;
+    }
+    if (activeBuiltinId === BUILTIN_EMBODY) return null;
+    if (activeCustom?.id && activeCustom?.hub?.navigation?.length) return activeCustom.id;
+    return null;
+  }
+
   function getHubChaptersForDay(day) {
+    if (activeBuiltinId === BUILTIN_DEFAULT && typeof Pm30Hub !== 'undefined') {
+      return Pm30Hub.hubItemsForDay(day);
+    }
     const hub = getHub();
     if (!hub?.navigation) return [];
     const n = Number(day);
@@ -352,6 +374,7 @@ const ContentPack = (() => {
     hasDayMaterials,
     getHub,
     hasHub,
+    getHubPackIdForIframe,
     getHubChaptersForDay,
   };
 })();

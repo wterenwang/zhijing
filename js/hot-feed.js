@@ -1,5 +1,5 @@
 /**
- * 具身智能产业日课：联网搜索 → LLM 策展 → 章节跳转
+ * 产业/岗位日课：联网搜索 → LLM 策展 → 章节跳转
  * 数据写入 appData.hotFeed / appData.hotArchive；搜索 Key 单独存 localStorage
  */
 const HotFeed = (() => {
@@ -10,15 +10,15 @@ const HotFeed = (() => {
   const SEARCH_COUNT = 18;
 
   const QUERY_POOL = [
-    '人形机器人 具身智能 融资 量产 新闻 近一周',
-    'VLA 机器人 大模型 开源 发布 本周',
-    '宇树 智元 优必选 Optimus 机器人 动态',
-    '服务机器人 家庭 工业 巡检 落地 新闻',
-    '机器人 安全标准 政策 具身智能 本周',
+    '产品经理 产品设计 用户体验 近一周 新闻',
+    '互联网产品 需求分析 增长 本周',
+    'A/B测试 产品指标 上线复盘 新闻',
+    '产品方法论 PRD 优先级 讨论',
+    '科技互联网 产品动态 近一周',
   ];
 
-  /** 关键词 → 知识库章节 / 术语（热点跳转） */
-  const CHAPTER_LINKS = [
+  /** 默认（具身隐藏路径）关键词 → 章节；PM30 使用 Pm30Hub.getChapterLinks() */
+  const CHAPTER_LINKS_EMBODY = [
     { keywords: ['具身智能', 'embodied'], label: '具身智能定义', hub: '/doc/module-1/01-definition', glossary: '具身智能' },
     { keywords: ['产业链', '供应链', '零部件'], label: '产业链图谱', hub: '/doc/module-1/03-industry-chain' },
     { keywords: ['宇树', 'unitree', 'g1', 'h1', 'go2'], label: '宇树深度研究', hub: '/doc/module-1/06-unitree', glossary: '宇树' },
@@ -43,7 +43,7 @@ const HotFeed = (() => {
     { keywords: ['sim-to-real', '仿真'], label: '世界模型 / Sim-to-Real', hub: '/doc/module-4/04-world-model', glossary: 'Sim-to-Real' },
   ];
 
-  const HOT_SYSTEM = `你是具身智能产业日课的策展编辑，面向「具身智能产品经理」读者，输出中文。
+  const HOT_SYSTEM = `你是产品经理学习日课的策展编辑，面向「产品经理入门 / 岗位学习」读者，输出中文。
 
 任务：从 search_results 中挑选 3～5 条不同事件的近期动态，每条写简短 PM 视角解读。时间范围：近 ${WINDOW_DAYS} 天。
 
@@ -52,12 +52,23 @@ const HotFeed = (() => {
 2. SOURCES：每条 sources[].url 必须精确匹配 search_results 中某条 url，禁止编造链接。
 3. UNIQUE：每条热点使用不同的主来源 url。
 4. EXCLUDE：尽量避开 exclude_urls 中已展示过的 url。
-5. BODY：每条 80～200 字，含背景 + 对 PM 意味着什么。
-6. tags：给 2～4 个短标签（如 VLA、宇树、家庭、融资）。
+5. BODY：每条 80～200 字，含背景 + 对 PM 意味着什么（方法、职业成长或产品决策视角）。
+6. tags：给 2～4 个短标签（如 需求、指标、增长、体验）。
 7. OUTPUT：仅输出 JSON 对象 {"items":[...]}，不要用 markdown 代码块包裹。
 
 输出 schema：
 {"items":[{"title":string,"body":string,"sources":[{"title":string,"url":string}],"follow":string,"tags":[string],"level":"入门"|"在职"}]}`;
+
+  function getChapterLinks() {
+    const builtinId =
+      typeof ContentPack !== 'undefined' ? ContentPack.getBuiltinId?.() : null;
+    if (builtinId === 'pm-30-intro' && typeof Pm30Hub !== 'undefined') {
+      return Pm30Hub.getChapterLinks();
+    }
+    if (builtinId === 'embodied-ai-pm') return CHAPTER_LINKS_EMBODY;
+    if (typeof Pm30Hub !== 'undefined') return Pm30Hub.getChapterLinks();
+    return CHAPTER_LINKS_EMBODY;
+  }
 
   let deps = {
     getAppData: () => ({}),
@@ -107,7 +118,7 @@ const HotFeed = (() => {
     const blob = `${item.title || ''} ${item.body || ''} ${(item.tags || []).join(' ')}`.toLowerCase();
     const hits = [];
     const seen = new Set();
-    for (const row of CHAPTER_LINKS) {
+    for (const row of getChapterLinks()) {
       const hit = row.keywords.some((k) => blob.includes(k.toLowerCase()));
       if (!hit) continue;
       const key = row.hub + '|' + (row.glossary || '');
@@ -262,7 +273,7 @@ const HotFeed = (() => {
       ? app.hotFeed.items.flatMap((it) => (it.sources || []).map((s) => s.url)).filter(Boolean)
       : [];
 
-    setStatus('正在联网搜索具身智能资讯…', 'loading');
+    setStatus('正在联网搜索产品相关资讯…', 'loading');
     const results = await runSearch(query);
 
     setStatus('搜索完成，正在撰写 PM 视角解读…', 'loading');
@@ -350,7 +361,7 @@ const HotFeed = (() => {
     if (!session || !session.items?.length) {
       list.innerHTML = `<div class="hot-empty glass">
         <p>还没有今日资讯。开启智能功能后可一键生成。</p>
-        <p class="hot-empty-desc">将先联网搜索近 ${WINDOW_DAYS} 天具身智能资讯，再由 AI 撰写 PM 视角解读。无搜索结果时不会编造热点。</p>
+        <p class="hot-empty-desc">将先联网搜索近 ${WINDOW_DAYS} 天产品相关资讯，再由 AI 撰写 PM 视角解读。无搜索结果时不会编造热点。</p>
       </div>`;
       if (meta) meta.textContent = '';
       return;

@@ -88,6 +88,7 @@ const PM30_INTERVIEW = [
   { id: 'pm30-i12', cat: '综合表达', days: '26-30', q: '用 3 分钟介绍你最完整的一个产品案例。', hint: '问题-调研-方案-取舍-结果/验证' },
 ];
 
+/** 闪卡简表；完整术语见 Pm30Hub.getGlossaryRich() */
 const PM30_GLOSSARY = [
   { term: '产品经理', def: '负责发现问题、定义方案、推动交付并验证价值的产品角色。' },
   { term: '用户画像', def: '对目标用户群体关键特征、动机与约束的结构化描述。' },
@@ -105,6 +106,14 @@ const PM30_GLOSSARY = [
   { term: 'trade-off', def: '在冲突目标间做可解释取舍，并明确放弃项。' },
   { term: 'JTBD', def: 'Jobs to be Done，用户雇佣产品完成某项「任务」的视角。' },
   { term: '埋点', def: '为观测行为与结果而预先设计的数据采集点。' },
+  { term: '问题陈述', def: '用结构化句子定义谁、场景、障碍、影响与成功标准。' },
+  { term: '伪需求', def: '看似需求、实为方案偏好或未经场景验证的诉求。' },
+  { term: '竞品分析', def: '对照同类产品的定位、流程与差异化机制，形成可行动结论。' },
+  { term: '用户访谈', def: '通过开放式对话收集场景证据，而非功能投票。' },
+  { term: 'P0', def: '当前周期必须完成的最高优先级范围边界。' },
+  { term: '非目标', def: '明确本期不做的事项，防止范围膨胀。' },
+  { term: '灰度发布', def: '先对部分用户开放，以降低上线风险并收集反馈。' },
+  { term: '费曼复述', def: '用自己的话讲清概念，以暴露理解缺口的学习方法。' },
 ];
 
 const PM30_SKILLS = [
@@ -171,8 +180,19 @@ const Pm30Pack = {
   getPortfolio: () => PM30_PORTFOLIO,
   getDayResources: (day) => {
     const data = PM30_DAY_RESOURCES[Number(day)];
-    return { resources: data?.resources || [], hub: [] };
+    const hubItems =
+      typeof Pm30Hub !== 'undefined' ? Pm30Hub.hubItemsForDay(day) : [];
+    return {
+      resources: data?.resources || [],
+      hub: hubItems.map((h) => h.slug),
+      hubItems,
+    };
   },
+  getHub: () => (typeof Pm30Hub !== 'undefined' ? Pm30Hub.getHub() : null),
+  ensureHubSeeded: () => {
+    if (typeof Pm30Hub !== 'undefined') Pm30Hub.ensureSeeded();
+  },
+
   getHotConfig: () => ({
     keywords: PM30_HOT.keywords,
     systemHint: PM30_HOT.systemHint,

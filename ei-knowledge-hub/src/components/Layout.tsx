@@ -19,7 +19,7 @@ export function Layout() {
       {!isEmbed && (
         <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-4">
           <Link to="/" className="font-bold text-lg text-slate-900 hover:text-cyan-700 shrink-0 max-w-[200px] truncate">
-            {isRuntime ? hubTitle : '具身智能 PM 知识库'}
+            {isRuntime ? hubTitle : '知径 · 知识库'}
           </Link>
           <div className="flex-1 flex justify-center max-w-md mx-auto">
             {!missingHub && <SearchBar />}

@@ -2,32 +2,81 @@
  * 中等价值冲刺工具：笔记搜索、周复盘、术语闪卡、模拟面试计时
  */
 const GLOSSARY_CARDS = [
-  { term: '具身智能', def: '智能体通过物理身体与环境交互，完成感知、决策与执行的闭环。' },
-  { term: 'VLA', def: 'Vision-Language-Action，将视觉与语言指令映射为机器人动作。' },
-  { term: 'RT-2', def: 'Google 的 VLA 模型，把网页预训练知识迁移到机器人控制。' },
-  { term: 'OpenVLA', def: '开源 7B VLA，基于 Open X-Embodiment 数据集训练。' },
-  { term: '强化学习', def: '通过奖励信号与环境交互学习策略，常用于运动控制。' },
-  { term: '模仿学习', def: '从专家演示中学习，无需显式奖励函数。' },
-  { term: 'Diffusion Policy', def: '用扩散模型生成动作序列，擅长多模态动作分布。' },
-  { term: '世界模型', def: '机器人对环境的内部预测，用于规划与仿真。' },
-  { term: '数据飞轮', def: '用户数据反哺模型迭代，形成采集-训练-部署闭环。' },
-  { term: '数据闭环', def: '采集、标注、训练、评测、部署反馈的完整链路。' },
-  { term: 'IMU', def: '惯性测量单元，测加速度与角速度，用于姿态估计。' },
-  { term: '伺服驱动器', def: '精确控制电机运动，是人形关节核心部件。' },
-  { term: 'CoRL', def: 'Conference on Robot Learning，机器人学习顶会。' },
-  { term: 'PRD', def: '产品需求文档，定义背景、需求、验收标准。' },
-  { term: '宇树', def: 'Unitree，中国四足/人形机器人公司，高性价比。' },
-  { term: 'Optimus', def: 'Tesla 人形机器人，目标工厂与家庭场景。' },
+  { term: '产品经理', def: '负责发现问题、定义方案、推动交付并验证价值的产品角色。' },
+  { term: '用户画像', def: '对目标用户群体关键特征、动机与约束的结构化描述。' },
+  { term: '用户故事', def: '以「作为…我想…以便…」表达需求，强调角色、目标与价值。' },
+  { term: '验收标准', def: '需求可被验证的完成定义，用于研发交付与测试对齐。' },
+  { term: 'MVP', def: '最小可行产品，用最少成本验证核心假设。' },
+  { term: 'PRD', def: '产品需求文档，固化背景、范围、需求与验收等共识。' },
+  { term: '优先级', def: '在约束下决定先做什么、后做什么、不做什么。' },
+  { term: 'RICE', def: '用 Reach、Impact、Confidence、Effort 量化排序需求的方法。' },
+  { term: '北星指标', def: '最能代表产品长期价值创造的核心指标。' },
+  { term: '护栏指标', def: '防止优化主指标时破坏体验或安全的约束指标。' },
+  { term: '问题陈述', def: '用结构化句子定义谁、场景、障碍、影响与成功标准。' },
+  { term: '伪需求', def: '看似需求、实为方案偏好或未经场景验证的诉求。' },
+  { term: '竞品分析', def: '对照同类产品的定位、流程与差异化机制，形成可行动结论。' },
+  { term: 'trade-off', def: '在冲突目标间做可解释取舍，并明确放弃项。' },
+  { term: 'JTBD', def: 'Jobs to be Done，用户雇佣产品完成某项「任务」的视角。' },
+  { term: '埋点', def: '为观测行为与结果而预先设计的数据采集点。' },
 ];
 
-const WEEK_REVIEW_CONFIG = {
+const WEEK_REVIEW_CONFIG_PM30 = {
+  7: {
+    title: '第 1 周复盘',
+    subtitle: '岗位与产品基础',
+    fields: [
+      { key: 'harvest', label: '本周 3 个核心收获', placeholder: '1. ...\n2. ...\n3. ...' },
+      { key: 'questions', label: '仍有疑问的 2 个问题', placeholder: '1. ...\n2. ...' },
+      { key: 'focus', label: '下周 1 个学习重点', placeholder: '例如：练习一次用户访谈提纲…' },
+    ],
+  },
+  14: {
+    title: '第 2 周复盘',
+    subtitle: '发现与定义问题',
+    fields: [
+      { key: 'harvest', label: '本周 3 个核心收获', placeholder: '1. ...\n2. ...\n3. ...' },
+      { key: 'questions', label: '调研中还不清楚的点', placeholder: '例如：问题陈述是否混入了方案…' },
+      { key: 'focus', label: '下周 1 个学习重点', placeholder: '例如：完成竞品对比表…' },
+    ],
+  },
+  21: {
+    title: '第 3 周复盘',
+    subtitle: '方案与文档',
+    fields: [
+      { key: 'harvest', label: '本周最重要的 3 个产出', placeholder: '方案 / 流程 / PRD…' },
+      { key: 'questions', label: 'PRD 或优先级里卡住的点', placeholder: '' },
+      { key: 'focus', label: '下周 1 个学习重点', placeholder: '例如：补验收标准与指标…' },
+    ],
+  },
+  28: {
+    title: '第 4 周复盘（上）',
+    subtitle: '指标协作与表达',
+    fields: [
+      { key: 'harvest', label: '本周 3 个核心收获', placeholder: '' },
+      { key: 'questions', label: '路演或协作中的薄弱点', placeholder: '' },
+      { key: 'focus', label: '结营前要补齐的材料', placeholder: '' },
+    ],
+  },
+  30: {
+    title: '结营复盘',
+    subtitle: '30 天总结与下阶段',
+    fields: [
+      { key: 'harvest', label: '30 天最重要的 3 个认知转变', placeholder: '' },
+      { key: 'questions', label: '仍想继续学的主题', placeholder: '' },
+      { key: 'focus', label: '下阶段 1 个行动计划', placeholder: '' },
+    ],
+  },
+};
+
+/** 隐藏路径（具身）周复盘；仅 embodied 激活时使用 */
+const WEEK_REVIEW_CONFIG_EMBODY = {
   7: {
     title: '第 1 周复盘',
     subtitle: '行业与市场全景',
     fields: [
       { key: 'harvest', label: '本周 3 个核心收获', placeholder: '1. ...\n2. ...\n3. ...' },
       { key: 'questions', label: '仍有疑问的 2 个问题', placeholder: '1. ...\n2. ...' },
-      { key: 'focus', label: '下周 1 个学习重点', placeholder: '例如：深入理解 VLA...' },
+      { key: 'focus', label: '下周 1 个学习重点', placeholder: '例如：深入理解技术概念…' },
     ],
   },
   14: {
@@ -35,7 +84,7 @@ const WEEK_REVIEW_CONFIG = {
     subtitle: '产品与技术基础（上）',
     fields: [
       { key: 'harvest', label: '本周 3 个核心收获', placeholder: '1. ...\n2. ...\n3. ...' },
-      { key: 'questions', label: '技术概念中还不清楚的点', placeholder: '例如：RL和IL的边界...' },
+      { key: 'questions', label: '技术概念中还不清楚的点', placeholder: '' },
       { key: 'focus', label: '下周 1 个学习重点', placeholder: '' },
     ],
   },
@@ -50,7 +99,7 @@ const WEEK_REVIEW_CONFIG = {
   },
   28: {
     title: '第一阶段复盘（下）',
-    subtitle: '3000 字总结准备',
+    subtitle: '总结准备',
     fields: [
       { key: 'harvest', label: '总结大纲（章节标题）', placeholder: '# 一、行业认知\n# 二、技术基础\n...' },
       { key: 'questions', label: '写总结时卡住的点', placeholder: '' },
@@ -63,10 +112,18 @@ const WEEK_REVIEW_CONFIG = {
     fields: [
       { key: 'harvest', label: '拟定的 2-3 个作品集方向', placeholder: '项目一：...\n项目二：...' },
       { key: 'questions', label: '对作品集最大的担心', placeholder: '' },
-      { key: 'focus', label: 'Day 31 第一件事', placeholder: '' },
+      { key: 'focus', label: '下一步第一件事', placeholder: '' },
     ],
   },
 };
+
+function getWeekReviewConfigMap() {
+  const id = typeof ContentPack !== 'undefined' ? ContentPack.getBuiltinId?.() : null;
+  if (id === 'embodied-ai-pm') return WEEK_REVIEW_CONFIG_EMBODY;
+  return WEEK_REVIEW_CONFIG_PM30;
+}
+
+const WEEK_REVIEW_CONFIG = WEEK_REVIEW_CONFIG_PM30;
 
 const SprintToolsMid = {
   GLOSSARY_CARDS,
@@ -129,14 +186,18 @@ const SprintToolsMid = {
       if (!resultsEl) return;
 
       if (!q) {
-        resultsEl.innerHTML = '<p class="search-empty">输入关键词搜索 90 天笔记与费曼复述</p>';
+        resultsEl.innerHTML = '<p class="search-empty">输入关键词搜索笔记与费曼复述</p>';
         return;
       }
 
       const data = getAppData();
       const hits = [];
+      const totalDays =
+        typeof ContentPack !== 'undefined' && ContentPack.getTotalDays
+          ? ContentPack.getTotalDays()
+          : 30;
 
-      for (let d = 1; d <= 90; d++) {
+      for (let d = 1; d <= totalDays; d++) {
         const key = String(d);
         const note = (data.notes[key] || '').toLowerCase();
         const feyn = (data.feynman[key] || '').toLowerCase();
@@ -194,7 +255,7 @@ const SprintToolsMid = {
       const section = document.getElementById('weekly-review-section');
       if (!section) return;
 
-      const cfg = WEEK_REVIEW_CONFIG[day];
+      const cfg = getWeekReviewConfigMap()[day];
       if (!cfg) {
         section.hidden = true;
         return;

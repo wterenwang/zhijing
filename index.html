@@ -339,6 +339,10 @@
     .checkin-hint {
       font-size: 0.82rem;
       color: var(--text-muted);
+      line-height: 1.4;
+    }
+    .checkin-hint.is-warn {
+      color: #b45309;
     }
 
     /* 今日资料区 */
@@ -1139,147 +1143,186 @@
       border-color: rgba(8, 145, 178, 0.35);
     }
 
-    /* 径径使用指南：左讲解 + 右场景图 */
-    #onboarding-modal .modal-box.onb-guide-box {
-      max-width: min(920px, 94vw);
-      width: 100%;
-      padding: 0;
+    /* 径径组件旁导游：无模糊遮罩 */
+    .onb-coach-root {
+      position: fixed;
+      inset: 0;
+      z-index: 320;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.2s ease;
+    }
+    .onb-coach-root.open {
+      opacity: 1;
+      visibility: visible;
+    }
+    .onb-coach {
+      pointer-events: auto;
+      position: fixed;
+      z-index: 321;
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      max-width: min(420px, calc(100vw - 20px));
+      filter: drop-shadow(0 14px 28px rgba(15, 23, 42, 0.16));
+      animation: onb-coach-in 0.35s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+    }
+    .onb-coach[data-side="left"] {
+      flex-direction: row-reverse;
+    }
+    @keyframes onb-coach-in {
+      from { opacity: 0; transform: translateY(10px) scale(0.96); }
+      to { opacity: 1; transform: none; }
+    }
+    .onb-coach-avatar {
+      flex-shrink: 0;
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
       overflow: hidden;
+      border: 2px solid #fff;
+      background:
+        radial-gradient(circle at 35% 30%, #ecfeff, #a5f3fc 55%, #67e8f9);
+      box-shadow: 0 8px 20px rgba(8, 145, 178, 0.28);
     }
-    .onb-layout {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 0;
+    .onb-coach-avatar img {
+      display: block;
+      width: 130%;
+      height: 130%;
+      margin: -8% 0 0 -12%;
+      object-fit: cover;
+      object-position: center 8%;
+      animation: onb-avatar-bob 2.4s ease-in-out infinite;
     }
-    @media (min-width: 780px) {
-      .onb-layout {
-        grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-        align-items: stretch;
-      }
+    @keyframes onb-avatar-bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
     }
-    .onb-copy {
-      padding: 26px 26px 8px;
+    .onb-coach-bubble {
+      flex: 1;
+      min-width: 0;
+      max-height: min(72vh, 520px);
+      overflow-y: auto;
+      padding: 12px 14px 10px;
+      border-radius: 16px 16px 16px 6px;
+      background: #fffdf9;
+      border: 1px solid rgba(8, 145, 178, 0.18);
+      color: var(--text-primary);
+      scrollbar-width: thin;
+    }
+    .onb-coach[data-side="left"] .onb-coach-bubble {
+      border-radius: 16px 16px 6px 16px;
     }
     .onb-kicker {
-      font-size: 0.72rem;
+      font-size: 0.68rem;
       font-weight: 600;
       color: var(--accent-cyan);
       letter-spacing: 0.04em;
-      margin: 0 0 8px;
+      margin: 0 0 4px;
     }
     #onboarding-title {
-      font-size: 1.35rem;
+      font-size: 1rem;
       font-weight: 700;
-      margin: 0 0 12px;
+      margin: 0 0 8px;
       letter-spacing: -0.02em;
+      line-height: 1.3;
     }
     .onb-say {
-      margin: 0 0 16px;
-      padding: 12px 14px;
-      border-radius: 14px 14px 14px 4px;
+      margin: 0 0 8px;
+      padding: 8px 10px;
+      border-radius: 10px 10px 10px 4px;
       background: rgba(8, 145, 178, 0.08);
-      border: 1px solid rgba(8, 145, 178, 0.16);
+      border: 1px solid rgba(8, 145, 178, 0.14);
       color: var(--text-primary);
-      font-size: 0.92rem;
+      font-size: 0.82rem;
       font-weight: 500;
-      line-height: 1.55;
+      line-height: 1.45;
     }
-    .onb-scene-label {
-      margin: 0 0 4px;
+    .onb-coach-body {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+      margin: 0 0 10px;
+    }
+    .onb-coach-body strong { color: var(--text-primary); font-weight: 600; }
+    .onb-coach-body .onb-steps { margin: 6px 0 8px; padding-left: 1.1em; }
+    .onb-coach-body .onb-api-btn,
+    .onb-coach-body .onb-try-btn {
+      margin-top: 6px;
+      font-size: 0.8rem;
+      padding: 6px 12px;
+      display: inline-flex;
+    }
+    .onb-section-label {
+      margin: 10px 0 4px;
       font-size: 0.72rem;
       font-weight: 700;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.04em;
       color: var(--accent-cyan);
-      text-transform: none;
     }
-    .onb-scene {
-      margin: 0 0 14px;
-      font-size: 0.86rem;
-      color: var(--text-muted);
-      line-height: 1.5;
+    .onb-feat-list {
+      margin: 4px 0 8px;
+      padding-left: 1.15em;
     }
-    #onboarding-body {
-      font-size: 0.9rem;
-      color: var(--text-secondary);
-      line-height: 1.65;
-      min-height: 100px;
-    }
-    #onboarding-body strong { color: var(--text-primary); font-weight: 600; }
-    .onb-visual {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 10px;
-      padding: 18px 18px 8px;
-      background:
-        radial-gradient(ellipse 80% 60% at 70% 30%, rgba(103, 232, 249, 0.28), transparent 55%),
-        linear-gradient(165deg, #e8f7fa 0%, #f7fcfd 100%);
-      border-left: 1px solid rgba(8, 145, 178, 0.1);
-    }
-    @media (max-width: 779px) {
-      .onb-visual {
-        border-left: none;
-        border-top: 1px solid rgba(8, 145, 178, 0.1);
-        padding-top: 12px;
-      }
-    }
-    .onb-visual-frame {
-      border-radius: 14px;
-      overflow: hidden;
-      background: #fff;
-      box-shadow: 0 12px 28px rgba(8, 145, 178, 0.12);
-      aspect-ratio: 4 / 3;
-    }
-    .onb-scene-img {
-      display: block;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: center;
-    }
-    .onb-scene-img.is-swap {
-      animation: onb-img-in 0.4s ease both;
-    }
-    @keyframes onb-img-in {
-      from { opacity: 0.35; transform: scale(1.02); }
-      to { opacity: 1; transform: scale(1); }
-    }
-    .onb-caption {
-      margin: 0;
-      text-align: center;
+    .onb-feat-list li { margin-bottom: 0.35em; }
+    .onb-tip {
+      margin: 8px 0 4px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.2);
+      color: var(--text-primary);
       font-size: 0.78rem;
-      color: #3d6472;
-      font-weight: 500;
+      line-height: 1.5;
     }
     .onb-footer {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 8px;
       margin: 0;
-      padding: 14px 22px 18px;
-      border-top: 1px solid var(--border-glass);
+      padding-top: 8px;
+      border-top: 1px solid rgba(15, 23, 42, 0.08);
     }
     .onb-progress {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
     }
     #onboarding-step {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: var(--text-muted);
       font-variant-numeric: tabular-nums;
     }
-    #onboarding-dots { display: flex; gap: 5px; }
+    #onboarding-dots { display: flex; gap: 4px; }
     .onb-dot {
-      width: 6px;
-      height: 6px;
+      width: 5px;
+      height: 5px;
       border-radius: 50%;
       background: rgba(15, 23, 42, 0.15);
     }
-    .onb-dot.active { background: var(--accent-cyan); width: 16px; border-radius: 4px; }
-    .onb-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .onb-dot.active { background: var(--accent-cyan); width: 12px; border-radius: 4px; }
+    .onb-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .onb-actions .btn-secondary,
+    .onb-actions .btn-primary {
+      font-size: 0.78rem;
+      padding: 6px 10px;
+    }
+    .onb-spotlight {
+      outline: 3px solid var(--accent-cyan) !important;
+      outline-offset: 4px;
+      border-radius: 12px;
+      position: relative;
+      z-index: 6;
+      animation: onb-pulse 1.2s ease-in-out infinite;
+      box-shadow: 0 0 0 6px rgba(8, 145, 178, 0.12);
+    }
+    @keyframes onb-pulse {
+      0%, 100% { outline-color: rgba(8, 145, 178, 0.95); }
+      50% { outline-color: rgba(8, 145, 178, 0.35); }
+    }
     .onb-steps {
       margin: 10px 0 14px;
       padding-left: 1.25rem;
@@ -1353,6 +1396,19 @@
       padding: 3px 8px;
       border-radius: 6px;
       margin-bottom: 10px;
+    }
+    .project-card .pc-badge.is-demo {
+      color: #b45309;
+      background: rgba(245, 158, 11, 0.14);
+    }
+    .project-card.is-demo {
+      border-style: dashed;
+    }
+    .project-card .pc-note {
+      margin: -4px 0 12px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.45;
     }
     .project-card h2 {
       margin: 0 0 6px;
@@ -3064,7 +3120,7 @@
     <div id="projects-view" class="view-panel active">
       <header class="projects-hero">
         <h1>知径</h1>
-        <p>每天一点点，学懂一个岗位。推荐先从「产品经理 30 天入门」开始。</p>
+        <p>每天一点点，学懂一个岗位。默认课表仅作展示；真正学习请「新建路径」。</p>
         <div class="projects-hero-actions">
           <button type="button" class="btn-guide" data-open-onboarding>使用指南 · 路径是什么？</button>
           <button type="button" class="btn-guide" data-open-onboarding-api>如何配置 API？</button>
@@ -3072,7 +3128,7 @@
       </header>
       <p class="projects-section-label">我的路径</p>
       <div class="projects-toolbar" style="margin-bottom:14px">
-        <span class="hint">点卡片进入；首次可看「使用指南」了解路径是什么</span>
+        <span class="hint">默认课表是展示样例；学正式内容请点「新建路径」</span>
         <button type="button" class="btn-secondary" id="btn-create-project">新建路径</button>
       </div>
       <div class="projects-grid" id="projects-grid"></div>
@@ -3095,7 +3151,7 @@
         </div>
         <div class="stat-pill">
           <div class="label">剩余天数</div>
-          <div class="value" id="stat-countdown">90 天</div>
+          <div class="value" id="stat-countdown">30 天</div>
         </div>
       </div>
     </header>
@@ -3103,7 +3159,7 @@
     <div class="progress-wrap">
       <div class="progress-meta">
         <span>学习进度</span>
-        <span id="progress-text">0 / 90 天已打卡</span>
+        <span id="progress-text">0 / 30 天已打卡</span>
       </div>
       <div class="progress-bar">
         <div class="progress-fill" id="progress-fill" style="width: 0%"></div>
@@ -3200,7 +3256,7 @@
               <div class="desc">已打卡</div>
             </div>
             <div class="stats-item">
-              <div class="num" id="stat-total">90</div>
+              <div class="num" id="stat-total">30</div>
               <div class="desc">总天数</div>
             </div>
             <div class="stats-item" style="grid-column: span 2">
@@ -3279,7 +3335,7 @@
           <button type="button" class="more-card" data-open-onboarding>
             <span class="mc-kicker">帮助</span>
             <span class="mc-title">使用指南</span>
-            <span class="mc-desc">路径是什么？今天、知识库、术语库怎么用</span>
+            <span class="mc-desc">默认课表仅展示；重点是新建自己的路径</span>
           </button>
         </div>
       </div>
@@ -3310,7 +3366,7 @@
         <iframe id="hub-frame" title="知识库" src="about:blank"></iframe>
         <div id="hub-empty" class="hub-empty" hidden>
           <h3>这里还没有阅读内容</h3>
-          <p>当前路径以每天打卡为主。若想生成专属阅读章节，回到我的路径列表，点「生成阅读内容」（需先开启智能功能）。</p>
+          <p>当前路径还没有知识库章节。可回到路径列表，点「生成阅读内容」（需先开启智能功能）；或先使用默认的「产品经理 30 天入门」。</p>
         </div>
       </div>
     </div>
@@ -3370,13 +3426,13 @@
 
       <div id="tools-portfolio" class="tools-panel">
         <h2 class="tools-section-title" style="padding:24px 24px 0">作品集里程碑看板</h2>
-        <p class="tools-section-desc" style="padding:0 24px">独立于每日打卡，追踪三个项目的真实产出进度</p>
+        <p class="tools-section-desc" style="padding:0 24px">独立于每日打卡，追踪作品集里程碑进度</p>
         <div class="portfolio-board" id="portfolio-board" style="padding:0 24px 24px"></div>
       </div>
 
       <div id="tools-apply" class="tools-panel glass" style="padding:24px">
         <h2 class="tools-section-title">投递管理表</h2>
-        <p class="tools-section-desc">记录校招投递进度，Day 90 直接用起来</p>
+        <p class="tools-section-desc">记录投递进度，方便复盘与面试准备</p>
         <div class="apply-summary" id="apply-summary"></div>
         <div class="apply-table-wrap">
           <table class="apply-table">
@@ -3393,12 +3449,12 @@
 
       <div id="tools-search" class="tools-panel glass" style="padding:24px">
         <h2 class="tools-section-title">全笔记搜索</h2>
-        <p class="tools-section-desc">搜索 90 天学习笔记与费曼复述，一键跳转到对应天数</p>
+        <p class="tools-section-desc">搜索学习笔记与费曼复述，一键跳转到对应天数</p>
         <div class="notes-search-bar">
-          <input type="search" id="notes-search-input" placeholder="输入关键词，如 VLA、宇树、数据飞轮…">
+          <input type="search" id="notes-search-input" placeholder="输入关键词，如 PRD、用户故事、优先级…">
           <button type="button" class="btn-primary" id="notes-search-btn">搜索</button>
         </div>
-        <div id="notes-search-results"><p class="search-empty">输入关键词搜索 90 天笔记与费曼复述</p></div>
+        <div id="notes-search-results"><p class="search-empty">输入关键词搜索笔记与费曼复述</p></div>
       </div>
 
       <div id="tools-srs" class="tools-panel glass" style="padding:24px">
@@ -3543,34 +3599,27 @@
     </nav>
   </div>
 
-  <!-- 径径使用指南：讲解 + 场景演示 -->
-  <div class="modal-overlay" id="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-    <div class="glass modal-box onb-guide-box">
-      <div class="onb-layout">
-        <div class="onb-copy">
-          <p class="onb-kicker">径径陪你上手</p>
-          <h3 id="onboarding-title">欢迎来到知径</h3>
-          <div class="onb-say" id="onboarding-say" role="status">嗨～我是径径，带你快速熟悉知径。</div>
-          <p class="onb-scene-label">使用场景</p>
-          <p class="onb-scene" id="onboarding-scene"></p>
-          <div id="onboarding-body"></div>
-        </div>
-        <aside class="onb-visual" aria-hidden="true">
-          <div class="onb-visual-frame">
-            <img id="onboarding-scene-img" class="onb-scene-img" src="assets/guide/guide-scene-welcome.jpg?v=4" alt="">
-          </div>
-          <p class="onb-caption" id="onboarding-caption">径径演示</p>
-        </aside>
+  <!-- 径径组件旁导游：无模糊遮罩，贴目标讲解 -->
+  <div id="onboarding-modal" class="onb-coach-root" role="dialog" aria-modal="false" aria-labelledby="onboarding-title">
+    <div id="onb-coach" class="onb-coach" data-side="right">
+      <div class="onb-coach-avatar" aria-hidden="true">
+        <img id="onb-coach-img" src="assets/mascot/jingjing-point.png?v=20260717b" alt="">
       </div>
-      <div class="onb-footer">
-        <div class="onb-progress">
-          <span id="onboarding-step">1 / 6</span>
-          <div id="onboarding-dots" aria-hidden="true"></div>
-        </div>
-        <div class="onb-actions">
-          <button type="button" class="btn-secondary" id="onboarding-skip">跳过</button>
-          <button type="button" class="btn-secondary" id="onboarding-prev" hidden>上一步</button>
-          <button type="button" class="btn-primary" id="onboarding-next">下一步</button>
+      <div class="onb-coach-bubble">
+        <p class="onb-kicker">径径陪你上手</p>
+        <h3 id="onboarding-title">欢迎来到知径</h3>
+        <div class="onb-say" id="onboarding-say" role="status"></div>
+        <div id="onboarding-body" class="onb-coach-body"></div>
+        <div class="onb-footer">
+          <div class="onb-progress">
+            <span id="onboarding-step">1 / 7</span>
+            <div id="onboarding-dots" aria-hidden="true"></div>
+          </div>
+          <div class="onb-actions">
+            <button type="button" class="btn-secondary" id="onboarding-skip">跳过</button>
+            <button type="button" class="btn-secondary" id="onboarding-prev" hidden>上一步</button>
+            <button type="button" class="btn-primary" id="onboarding-next">下一步</button>
+          </div>
         </div>
       </div>
     </div>
@@ -3672,14 +3721,14 @@
           </div>
         </div>
         <label for="create-notes">备注（可选）</label>
-        <input id="create-notes" type="text" placeholder="例如：侧重家庭机器人" maxlength="80" />
+        <input id="create-notes" type="text" placeholder="例如：侧重 B 端协作 / 偏增长" maxlength="80" />
         <label class="create-mode" style="display:flex;align-items:flex-start;gap:8px;margin-top:14px;cursor:pointer">
           <input type="checkbox" id="create-use-ai" style="margin-top:3px" />
           <span style="font-size:0.82rem;color:var(--text-secondary);line-height:1.4">
             <strong style="color:var(--text-primary)">用智能功能生成专属课表</strong>（含阅读章节、练习与资料）。需先「开启智能功能」。若同时配置了<strong>搜索密钥</strong>（博查/Tavily），生成资料与章节时会联网查证，质量更好。不勾选则创建空路径，可稍后再生成。
           </span>
         </label>
-        <p class="form-tip">新手建议先用首页的「产品经理 30 天入门」，点进去就能学。</p>
+        <p class="form-tip">默认「产品经理 30 天入门」只是展示样例；请在这里创建属于你的岗位路径。</p>
       </div>
       <div class="modal-actions">
         <button class="btn-secondary" id="create-project-cancel">取消</button>
@@ -3713,6 +3762,7 @@
 
   <script src="js/projects.js"></script>
   <script src="js/pm30-pack.js"></script>
+  <script src="js/pm30-hub.js"></script>
   <script src="js/content-pack.js"></script>
   <script src="js/pack-generator.js"></script>
   <script src="js/day-resources.js"></script>
@@ -3720,12 +3770,12 @@
   <script src="js/hot-feed.js"></script>
   <script src="js/ai-review.js"></script>
   <script src="js/splash.js?v=20260716f"></script>
-  <script src="js/onboarding.js?v=20260716k"></script>
+  <script src="js/onboarding.js?v=20260717v9"></script>
   <script src="js/spaced-repetition.js"></script>
   <script src="js/srs-ai.js"></script>
   <script src="js/sprint-tools.js"></script>
   <script src="js/sprint-tools-mid.js"></script>
-  <script src="js/mascot.js?v=20260716m"></script>
+  <script src="js/mascot.js?v=20260717v6"></script>
   <script>
     // ============================================================
     // 90天学习计划数据（结构化）
@@ -4175,7 +4225,7 @@
           }).join('');
       };
 
-      if (typeof ContentPack !== 'undefined' && !ContentPack.isBuiltin()) {
+      if (typeof ContentPack !== 'undefined') {
         const dayData = ContentPack.getDayResources?.(day) || { resources: [], hubItems: [] };
         paintResources(dayData.resources || []);
         const hubItems = dayData.hubItems?.length
@@ -4183,7 +4233,7 @@
           : (ContentPack.getHubChaptersForDay?.(day) || []);
         if (hubItems.length) {
           paintHub(hubItems);
-        } else if (ContentPack.hasHub?.()) {
+        } else if (ContentPack.hasHub?.() && !ContentPack.isBuiltin?.()) {
           const first = ContentPack.getHub()?.navigation?.[0]?.items?.[0];
           hubEl.innerHTML = first
             ? `<a class="hub-link" href="#" data-hub-slug="${escapeHtml(first.slug)}">打开 ${escapeHtml(first.title || '知识库')}</a>`
@@ -4191,17 +4241,18 @@
         } else {
           hubEl.innerHTML = '';
         }
-        if (!(dayData.resources || []).length && !ContentPack.hasDayMaterials?.(ContentPack.getActive())) {
+        if (
+          !ContentPack.isBuiltin?.() &&
+          !(dayData.resources || []).length &&
+          !ContentPack.hasDayMaterials?.(ContentPack.getActive())
+        ) {
           resEl.innerHTML = '<li><span style="color:var(--text-muted);font-size:0.85rem">今日精选资料尚未生成。可回路径列表点「生成每日练习」，或先按任务自学。</span></li>';
         }
         return;
       }
 
-      const data = typeof DAY_RESOURCES !== 'undefined'
-        ? (DAY_RESOURCES[day] || { resources: [], hub: [] })
-        : { resources: [], hub: [] };
-      paintResources(data.resources || []);
-      paintHub(data.hub || []);
+      paintResources([]);
+      paintHub([]);
     }
 
     function updatePracticeProgress(day, total) {
@@ -4281,6 +4332,7 @@
       if (!appData.dailyPractice[key]) appData.dailyPractice[key] = {};
       appData.dailyPractice[key][i] = { ...appData.dailyPractice[key][i], ...patch };
       saveData();
+      updateCheckinHintUI();
     }
 
     async function handleAiReview(item, idx, btn) {
@@ -4398,6 +4450,55 @@
       });
     }
 
+    function updateCheckinHintUI() {
+      const day = appData.currentViewDay;
+      const btn = document.getElementById('btn-checkin');
+      const hint = document.getElementById('checkin-hint');
+      if (!btn || !hint) return;
+      const isChecked = !!appData.checkins[String(day)];
+      const quality = getDayLearningQuality(day);
+      if (isChecked) {
+        hint.classList.remove('is-warn');
+        hint.textContent = quality.ready
+          ? '今日任务已完成，干得漂亮！'
+          : '已打卡。下次可先做完练习和复述再打，质量更扎实。';
+      } else if (quality.ready) {
+        hint.classList.remove('is-warn');
+        hint.textContent = '练习与复述已就绪，可以打卡了';
+      } else {
+        hint.classList.add('is-warn');
+        hint.textContent = `建议先完成：${quality.missing.join('、')}（仍可打卡）`;
+      }
+    }
+
+    function getDayLearningQuality(day) {
+      const key = String(day);
+      const plan = getPlanDay(day);
+      const exercises =
+        typeof ContentPack !== 'undefined' && ContentPack.getExercises
+          ? ContentPack.getExercises(day, plan)
+          : [];
+      const practiceTotal = exercises.length;
+      const saved = appData.dailyPractice?.[key] || {};
+      let practiceDone = 0;
+      for (let i = 0; i < practiceTotal; i++) {
+        if (saved[String(i)]?.done) practiceDone++;
+      }
+      const feynmanOk = !!(appData.feynman?.[key] || '').trim();
+      const missing = [];
+      if (practiceTotal > 0 && practiceDone < practiceTotal) {
+        missing.push(`练习未完成（${practiceDone}/${practiceTotal}）`);
+      }
+      if (!feynmanOk) missing.push('还没写费曼复述');
+      return {
+        practiceDone,
+        practiceTotal,
+        feynmanOk,
+        missing,
+        ready: missing.length === 0,
+      };
+    }
+
     function renderDayCard() {
       const day = appData.currentViewDay;
       const plan = getPlanDay(day);
@@ -4421,14 +4522,24 @@
 
       const btn = document.getElementById('btn-checkin');
       const hint = document.getElementById('checkin-hint');
+      const quality = getDayLearningQuality(day);
       if (isChecked) {
         btn.textContent = '已打卡 ✓';
         btn.classList.add('done');
-        hint.textContent = '今日任务已完成，干得漂亮！';
+        hint.classList.remove('is-warn');
+        hint.textContent = quality.ready
+          ? '今日任务已完成，干得漂亮！'
+          : '已打卡。下次可先做完练习和复述再打，质量更扎实。';
       } else {
         btn.textContent = '完成打卡';
         btn.classList.remove('done');
-        hint.textContent = '完成今日任务后点击打卡';
+        if (quality.ready) {
+          hint.classList.remove('is-warn');
+          hint.textContent = '练习与复述已就绪，可以打卡了';
+        } else {
+          hint.classList.add('is-warn');
+          hint.textContent = `建议先完成：${quality.missing.join('、')}（仍可打卡）`;
+        }
       }
 
       document.getElementById('btn-prev').disabled = day <= 1;
@@ -4456,6 +4567,7 @@
       document.getElementById('progress-fill').style.width = `${pct}%`;
 
       document.getElementById('stat-checked').textContent = checked;
+      document.getElementById('stat-total').textContent = getTotalDays();
       document.getElementById('stat-streak').textContent = streak;
     }
 
@@ -4579,7 +4691,7 @@
         } else if (p.packStatus === 'failed') {
           badge = '<span class="pc-badge" style="color:#dc2626;background:rgba(220,38,38,0.1)">生成失败</span>';
         } else if (p.isDefault || p.id === ProjectPlatform.DEFAULT_ID) {
-          badge = '<span class="pc-badge">推荐入门</span>';
+          badge = '<span class="pc-badge is-demo">展示样例</span>';
         } else if (
           p.packStatus === 'builtin' ||
           (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))
@@ -4610,10 +4722,15 @@
           if (typeof ContentPack !== 'undefined' && ContentPack.hasDayMaterials(pack)) return '';
           return `<button type="button" data-mats-project="${p.id}">生成每日练习</button>`;
         })();
+        const isDemo = !!(p.isDefault || p.id === ProjectPlatform.DEFAULT_ID);
+        const demoNote = isDemo
+          ? '<p class="pc-note">用来演示知径怎么用；真正学习请新建自己的路径。</p>'
+          : '';
         return `
-          <article class="project-card" data-open-project="${p.id}" role="button" tabindex="0">
+          <article class="project-card${isDemo ? ' is-demo' : ''}" data-open-project="${p.id}" role="button" tabindex="0">
             ${badge}
             <h2>${escapeHtml(p.title)}</h2>
+            ${demoNote}
             <p class="pc-meta">${escapeHtml(p.industry)} · ${escapeHtml(p.role)}${p.goal ? ' · ' + escapeHtml(p.goal) : ''} · ${p.days || 30} 天</p>
             <div class="pc-progress">
               <span>进度 ${checked} / ${total}</span>
@@ -4621,7 +4738,7 @@
             </div>
             <div class="pc-bar"><span style="width:${pct}%"></span></div>
             <div class="pc-actions">
-              <button type="button" data-open-project="${p.id}">${p.packStatus === 'generating' ? '准备中' : '开始学习'}</button>
+              <button type="button" data-open-project="${p.id}">${p.packStatus === 'generating' ? '准备中' : isDemo ? '试用展示' : '开始学习'}</button>
               ${retryBtn}
               ${hubBtn}
               ${matsBtn}
@@ -5114,25 +5231,31 @@
         const hash = hubHash || (view === 'glossary' ? '/glossary' : view === 'graph' ? '/graph' : '/');
         const frame = document.getElementById('hub-frame');
         const empty = document.getElementById('hub-empty');
-        const HUB_CACHE_VER = '20260715p3q';
+        const HUB_CACHE_VER = '20260717pm30';
         const bust = Date.now();
         const builtinId = typeof ContentPack !== 'undefined' ? ContentPack.getBuiltinId?.() : null;
         const hasStaticEmbodyHub = builtinId === ContentPack?.BUILTIN_EMBODY;
-        const hasCustomHub = typeof ContentPack !== 'undefined' && !ContentPack.isBuiltin() && ContentPack.hasHub?.();
+        const hasPm30Hub =
+          builtinId === ContentPack?.BUILTIN_DEFAULT && ContentPack?.hasHub?.();
+        const hasCustomHub =
+          typeof ContentPack !== 'undefined' && !ContentPack.isBuiltin() && ContentPack.hasHub?.();
 
-        if (!hasStaticEmbodyHub && !hasCustomHub) {
+        if (!hasStaticEmbodyHub && !hasPm30Hub && !hasCustomHub) {
           if (frame) frame.hidden = true;
           if (empty) empty.hidden = false;
           if (frame) frame.src = 'about:blank';
         } else {
           if (frame) frame.hidden = false;
           if (empty) empty.hidden = true;
-          const packId =
-            activeProject?.packId &&
-            typeof ContentPack !== 'undefined' &&
-            !ContentPack.isBuiltin()
-              ? encodeURIComponent(activeProject.packId)
-              : '';
+          const packIdRaw =
+            typeof ContentPack !== 'undefined' && ContentPack.getHubPackIdForIframe
+              ? ContentPack.getHubPackIdForIframe()
+              : activeProject?.packId &&
+                  typeof ContentPack !== 'undefined' &&
+                  !ContentPack.isBuiltin()
+                ? activeProject.packId
+                : '';
+          const packId = packIdRaw ? encodeURIComponent(packIdRaw) : '';
           const packQ = packId ? `&packId=${packId}` : '';
           const target = `hub/index.html?embed=1${packQ}&v=${HUB_CACHE_VER}&t=${bust}#${hash}`;
           requestAnimationFrame(() => {
@@ -5342,6 +5465,13 @@
         if (appData.checkins[day]) {
           delete appData.checkins[day];
         } else {
+          const quality = getDayLearningQuality(appData.currentViewDay);
+          if (!quality.ready) {
+            const ok = confirm(
+              `今天还有未完成项：\n· ${quality.missing.join('\n· ')}\n\n仍要打卡吗？\n（可以打卡，但建议先练习、写复述，质量更扎实）`
+            );
+            if (!ok) return;
+          }
           appData.checkins[day] = true;
         }
         saveData();
@@ -5360,6 +5490,7 @@
       // 费曼自动保存
       document.getElementById('feynman-input').addEventListener('input', (e) => {
         autoSave('feynman', e.target.value, 'feynman-save-hint');
+        updateCheckinHintUI();
       });
 
       // 起始日期
@@ -5603,6 +5734,13 @@
             if (aiReviewApi?.openSettingsModal) aiReviewApi.openSettingsModal();
             else document.getElementById('ai-key-modal')?.classList.add('open');
           },
+          openCreate: () => document.getElementById('btn-create-project')?.click(),
+          showHome: () => showProjectsHome(),
+          enterProject: (id, opts) => enterProject(id, opts || {}),
+          switchView: (view, hash) => switchView(view, hash || ''),
+          focusSection: (focus) => focusSprintSection(focus),
+          getDefaultProjectId: () =>
+            (typeof ProjectPlatform !== 'undefined' && ProjectPlatform.DEFAULT_ID) || 'pm-30-intro',
         });
       }
     }
