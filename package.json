@@ -1,7 +1,7 @@
 {
   "name": "zhijing",
   "productName": "知径",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "岗位方向学习路径 · 按天打卡",
   "author": {
     "name": "知径",
@@ -49,7 +49,7 @@
           ]
         }
       ],
-      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "artifactName": "Zhijing-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "nsis": {
@@ -79,7 +79,7 @@
           ]
         }
       ],
-      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
+      "artifactName": "Zhijing-${version}-mac-${arch}.${ext}",
       "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false

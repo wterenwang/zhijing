@@ -233,67 +233,136 @@ const DAY_EXERCISES_CURATED = {
 };
 
 function buildGeneratedExercises(plan) {
-  // 与 PackGenerator.buildVariedFallbackExercises 对齐：按日变化，避免全路径同骨架
+  // 与 PackGenerator.buildVariedFallbackExercises 对齐：按 phase 选骨架，避免 day%5 周期同质
   const day = Number(plan?.day) || 1;
   const topic = plan?.topic || '今日主题';
   const tasks = plan?.tasks || [];
-  const variant = ((day - 1) % 5) + 1;
+  const phase = String(plan?.phase || '');
   const t0 = tasks[0] ? String(tasks[0]).slice(0, 40) : '';
-  const sets = {
-    1: [
-      { q: `闭卷：用工作语言定义「${topic}」必须包含的 2 个要素`, rubric: GENERIC_RUBRICS.summary },
-      {
-        q: t0 ? `对照任务「${t0}」，列出 3 个可检查产出点` : `为「${topic}」写 3 条可打分检查点`,
-        rubric: GENERIC_RUBRICS.reflect,
-      },
-      {
-        q: `场景：开发与业务对「${topic}」范围争执，你先问哪 2 个问题？`,
-        rubric: GENERIC_RUBRICS.case,
-      },
+  const family = /实战|验证|作品|面试|提案|答辩/.test(phase)
+    ? 'practice'
+    : /方法|工具|技能|流程|分析/.test(phase)
+      ? 'method'
+      : 'cognition';
+  const bank = {
+    cognition: [
+      [
+        { q: `闭卷：用工作语言定义「${topic}」必须包含的 2 个要素`, rubric: GENERIC_RUBRICS.summary },
+        {
+          q: t0 ? `对照任务「${t0}」，列出 3 个可检查产出点` : `为「${topic}」写 3 条可打分检查点`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+        {
+          q: `场景：开发与业务对「${topic}」范围争执，你先问哪 2 个问题？`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+      ],
+      [
+        { q: `口述「${topic}」与相邻概念的 1 个关键差异（30 秒）`, rubric: GENERIC_RUBRICS.summary },
+        { q: `写出「${topic}」的 1 个常见误区与纠正`, rubric: GENERIC_RUBRICS.case },
+        {
+          q: `虚构 1 条用户原话暴露「${topic}」痛点，并改写成可验收需求`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+      ],
+      [
+        { q: `默写「${topic}」适用条件 2 条 + 不适用 1 条`, rubric: GENERIC_RUBRICS.summary },
+        {
+          q: `用 3 点提纲向同事讲清今天「${topic}」要达成什么`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+        {
+          q: `画出「${topic}」相关 3 类干系人及各 1 句成功标准`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+      ],
     ],
-    2: [
-      { q: `口述「${topic}」与相邻概念的 1 个关键差异（30 秒）`, rubric: GENERIC_RUBRICS.summary },
-      { q: `写出「${topic}」的 1 个常见误区与纠正`, rubric: GENERIC_RUBRICS.case },
-      {
-        q: `时间只够做一半：你会砍掉「${topic}」的哪一块？一句理由`,
-        rubric: GENERIC_RUBRICS.reflect,
-      },
+    method: [
+      [
+        {
+          q: `用「假如…就会…」各写一条：正确/误用「${topic}」的后果`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+        { q: `设计 1 道新人判断题（含答案要点），考点是「${topic}」`, rubric: GENERIC_RUBRICS.reflect },
+        {
+          q: `为「${topic}」选 1 个北极星 + 2 个护栏指标，说明为何不是虚荣指标`,
+          rubric: GENERIC_RUBRICS.summary,
+        },
+      ],
+      [
+        { q: `列出「${topic}」交付物必有字段/段落 3 个`, rubric: GENERIC_RUBRICS.summary },
+        {
+          q: `起草 PRD 中「${topic}」对应的 3 个必写小节标题（各注明读者）`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+        {
+          q: `要验证「${topic}」，向数据同学提 2 个取数问题（含时间窗/分群）`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+      ],
+      [
+        {
+          q: `围绕「${topic}」写可证伪假设（若…则…因为…）并点名主指标`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+        {
+          q: `对比竞品 A/B 在「${topic}」上的 2 差异，抄/不抄各 1 理由`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+        {
+          q: `给研发交接便条：关于「${topic}」必须同步的 3 个决策点`,
+          rubric: GENERIC_RUBRICS.summary,
+        },
+      ],
     ],
-    3: [
-      { q: `默写「${topic}」适用条件 2 条 + 不适用 1 条`, rubric: GENERIC_RUBRICS.summary },
-      {
-        q: `用 3 点提纲向同事讲清今天「${topic}」要达成什么`,
-        rubric: GENERIC_RUBRICS.reflect,
-      },
-      {
-        q: `冲突：运营要扩范围、你要守边界——写 ≤40 字协商开场白`,
-        rubric: GENERIC_RUBRICS.case,
-      },
-    ],
-    4: [
-      {
-        q: `用「假如…就会…」各写一条：正确/误用「${topic}」的后果`,
-        rubric: GENERIC_RUBRICS.case,
-      },
-      { q: `设计 1 道新人判断题（含答案要点），考点是「${topic}」`, rubric: GENERIC_RUBRICS.reflect },
-      {
-        q: `今天关于「${topic}」你只带走一句可迁移原则，是哪句？为何？`,
-        rubric: GENERIC_RUBRICS.summary,
-      },
-    ],
-    5: [
-      { q: `列出「${topic}」交付物必有字段/段落 3 个`, rubric: GENERIC_RUBRICS.summary },
-      {
-        q: `评审有人说「太细先跳过」——你如何用「${topic}」理由拉回？`,
-        rubric: GENERIC_RUBRICS.case,
-      },
-      {
-        q: `写下对「${topic}」仍不确定的一点，和下周验证产出`,
-        rubric: GENERIC_RUBRICS.question,
-      },
+    practice: [
+      [
+        {
+          q: `时间只够做一半：你会砍掉「${topic}」的哪一块？一句 ROI 理由`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+        {
+          q: `冲突：运营要扩范围、你要守边界——写 ≤40 字协商开场白`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+        {
+          q: `用 STAR 写 120 字内案例：你如何用「${topic}」推动决策`,
+          rubric: GENERIC_RUBRICS.summary,
+        },
+      ],
+      [
+        {
+          q: `评审有人说「太细先跳过」——你如何用「${topic}」理由拉回？`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+        {
+          q: `表格列「${topic}」MVP / 可延后 / 明确不做 各 1 项`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+        {
+          q: `在速度/质量/范围里为「${topic}」排优先级并说明牺牲了什么`,
+          rubric: GENERIC_RUBRICS.summary,
+        },
+      ],
+      [
+        {
+          q: `写 45 秒 Demo 开场：谁的什么问题 + 「${topic}」关键交互`,
+          rubric: GENERIC_RUBRICS.case,
+        },
+        {
+          q: `同事主张立刻扩大「${topic}」——拒绝或附条件同意的 2 条理由`,
+          rubric: GENERIC_RUBRICS.reflect,
+        },
+        {
+          q: `为今日「${topic}」产出设计及格/良好/优秀 3 档观察标准`,
+          rubric: GENERIC_RUBRICS.question,
+        },
+      ],
     ],
   };
-  return sets[variant] || sets[1];
+  const sets = bank[family] || bank.cognition;
+  const variant = (day - 1) % sets.length;
+  return sets[variant] || sets[0];
 }
 
 function getDailyExercises(day, plan) {
