@@ -117,6 +117,23 @@ const ContentPack = (() => {
     return activeCustom;
   }
 
+  /** 从 localStorage 重新加载当前激活包（后台生成写入后刷新） */
+  function reloadActive() {
+    if (!activeCustom?.id) return activeCustom;
+    const fresh = load(activeCustom.id);
+    if (fresh) activeCustom = fresh;
+    return activeCustom;
+  }
+
+  function getReadyThroughDay() {
+    if (activeBuiltinId) return getTotalDays();
+    if (!activeCustom) return 0;
+    const gen = activeCustom.meta?.generation;
+    if (gen && Number(gen.readyThroughDay) > 0) return Number(gen.readyThroughDay);
+    if (activeCustom.status === 'ready' || !gen) return getTotalDays();
+    return Number(gen?.readyThroughDay) || 0;
+  }
+
   function isBuiltin() {
     return !!activeBuiltinId;
   }
@@ -176,6 +193,10 @@ const ContentPack = (() => {
       def: g.definition || g.def || g.back || '',
       module: g.module || '',
       aliases: Array.isArray(g.aliases) ? g.aliases : [],
+      userPhrases: Array.isArray(g.userPhrases) ? g.userPhrases : [],
+      example: g.example || '',
+      visual: g.visual && typeof g.visual === 'object' ? g.visual : null,
+      confusions: Array.isArray(g.confusions) ? g.confusions : [],
       sections: Array.isArray(g.sections) ? g.sections : [],
     }));
   }
@@ -371,6 +392,8 @@ const ContentPack = (() => {
     activate,
     clear,
     getActive,
+    reloadActive,
+    getReadyThroughDay,
     isBuiltin,
     getBuiltinId,
     getPlan,

@@ -11,13 +11,14 @@ function useEmbedMode() {
 export function Layout() {
   const location = useLocation()
   const isGraph = location.pathname === '/graph'
+  const isGlossary = location.pathname.startsWith('/glossary')
   const isEmbed = useEmbedMode()
   const { navigation, hubTitle, missingHub, isRuntime } = useContent()
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-[100dvh] flex flex-col">
       {!isEmbed && (
-        <header className="sticky top-0 z-10 bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-4">
+        <header className="sticky top-0 z-10 flex items-center gap-4 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
           <Link to="/" className="font-bold text-lg text-slate-900 hover:text-cyan-700 shrink-0 max-w-[200px] truncate">
             {isRuntime ? hubTitle : '知径 · 知识库'}
           </Link>
@@ -45,7 +46,7 @@ export function Layout() {
             <Link
               to="/glossary"
               className={
-                location.pathname === '/glossary'
+                isGlossary
                   ? 'text-cyan-700 font-medium'
                   : 'text-slate-600 hover:text-cyan-700'
               }
@@ -57,7 +58,7 @@ export function Layout() {
       )}
 
       <div className="flex flex-1">
-        {!isGraph && !missingHub && (
+        {!isGraph && !isGlossary && !missingHub && (
         <aside
           className={`w-64 shrink-0 border-r border-slate-200 bg-white overflow-y-auto hidden md:block ${
             isEmbed
@@ -112,7 +113,9 @@ export function Layout() {
           className={
             isGraph
               ? `flex-1 p-2 md:p-4 w-full ${isEmbed ? 'max-w-none' : 'max-w-6xl mx-auto'}`
-              : `flex-1 p-6 ${isEmbed ? 'md:p-8' : 'md:p-10'} max-w-4xl`
+              : isGlossary
+                ? `flex-1 w-full px-5 py-8 sm:px-8 md:py-10 ${isEmbed ? 'max-w-none' : 'max-w-7xl mx-auto'}`
+                : `flex-1 p-6 ${isEmbed ? 'md:p-8' : 'md:p-10'} max-w-4xl`
           }
         >
           <Outlet />

@@ -30,3 +30,7 @@ PRD.md
 # 本地录屏/反馈素材
 *.mp4
 *.webm
+
+# 临时评测 / 本地打包缓存
+_eval_tmp/
+release-build/

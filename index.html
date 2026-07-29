@@ -177,6 +177,29 @@
       transition: width var(--transition);
     }
 
+    .fill-hint {
+      margin: -8px 0 20px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(8, 145, 178, 0.22);
+      background: rgba(8, 145, 178, 0.08);
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+    .fill-hint[hidden] { display: none !important; }
+    .fill-hint strong {
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+    .fill-hint.is-pending-day {
+      border-color: rgba(217, 119, 6, 0.28);
+      background: rgba(217, 119, 6, 0.08);
+    }
+    .fill-hint.is-pending-day strong {
+      color: #b45309;
+    }
+
     /* ===== 主布局 ===== */
     .main-grid {
       display: grid;
@@ -799,6 +822,12 @@
     .gen-dock.is-busy #gen-dock-stop { display: inline-flex; }
     .gen-dock.is-busy #gen-dock-open,
     .gen-dock.is-busy #gen-dock-dismiss { display: none !important; }
+    .gen-dock.is-busy.is-skeleton-ready #gen-dock-open {
+      display: inline-flex !important;
+    }
+    .gen-dock.is-busy.is-skeleton-ready #gen-dock-dismiss {
+      display: none !important;
+    }
 
     #ai-key-status {
       font-size: 0.78rem;
@@ -3201,6 +3230,8 @@
       </div>
     </div>
 
+    <div class="fill-hint" id="sprint-fill-hint" hidden role="status"></div>
+
     <div class="main-grid">
       <!-- 左侧主内容 -->
       <div class="content-col">
@@ -3769,7 +3800,7 @@
       <div class="gen-dock-bar"><div id="gen-pack-bar"></div></div>
       <p id="gen-pack-status">准备中…</p>
       <ul class="gen-dock-log" id="gen-dock-log"></ul>
-      <p class="gen-dock-hint">可继续浏览其它路径或功能，生成在后台进行。</p>
+      <p class="gen-dock-hint" id="gen-dock-hint">可继续浏览其它路径或功能，生成在后台进行。</p>
       <div class="gen-dock-actions" id="gen-dock-actions">
         <button type="button" class="btn-secondary btn-danger" id="gen-dock-stop">停止生成</button>
         <button type="button" class="btn-primary" id="gen-dock-open" hidden>打开路径</button>
@@ -4525,6 +4556,45 @@
       };
     }
 
+    function renderFillHint() {
+      const el = document.getElementById('sprint-fill-hint');
+      if (!el) return;
+      const project = activeProject || (typeof ProjectPlatform !== 'undefined'
+        ? ProjectPlatform.get(ProjectPlatform.getActiveId?.())
+        : null);
+      const pack =
+        typeof ContentPack !== 'undefined'
+          ? ContentPack.reloadActive?.() || ContentPack.getActive?.()
+          : null;
+      const status = project?.packStatus || pack?.status || '';
+      const gen = pack?.meta?.generation || {};
+      const readyN = Number(gen.readyThroughDay) || 0;
+      const filling =
+        status === 'partial' ||
+        gen.phase === 'filling' ||
+        (typeof GenDock !== 'undefined' &&
+          GenDock.isBusy?.() &&
+          GenDock.getActiveProjectId?.() === project?.id &&
+          GenDock.hadSkeletonReady?.());
+
+      if (!filling || !readyN) {
+        el.hidden = true;
+        el.textContent = '';
+        el.classList.remove('is-pending-day');
+        return;
+      }
+
+      const day = appData.currentViewDay;
+      el.hidden = false;
+      if (day > readyN) {
+        el.classList.add('is-pending-day');
+        el.innerHTML = `第 ${day} 天内容仍在后台准备。<strong>可先学 Day 1–${readyN}</strong>；补全完成后打开知识库会自动更新。`;
+      } else {
+        el.classList.remove('is-pending-day');
+        el.innerHTML = `其余天数仍在后台补全中。<strong>Day 1–${readyN} 已可学</strong>，先打卡即可；未就绪章节打开知识库会提示「准备中」。`;
+      }
+    }
+
     function renderDayCard() {
       const day = appData.currentViewDay;
       const plan = getPlanDay(day);
@@ -4714,6 +4784,12 @@
         let badge;
         if (p.packStatus === 'generating') {
           badge = '<span class="pc-badge" style="color:#ea580c;background:rgba(234,88,12,0.12)">准备中…</span>';
+        } else if (p.packStatus === 'partial') {
+          const readyN =
+            (p.packId && typeof ContentPack !== 'undefined'
+              ? ContentPack.load(p.packId)?.meta?.generation?.readyThroughDay
+              : null) || 3;
+          badge = `<span class="pc-badge" style="color:#0891b2;background:rgba(8,145,178,0.12)">可先学 Day1–${readyN}</span>`;
         } else if (p.packStatus === 'failed') {
           badge = '<span class="pc-badge" style="color:#dc2626;background:rgba(220,38,38,0.1)">生成失败</span>';
         } else if (p.packStatus === 'cancelled') {
@@ -4736,19 +4812,43 @@
           p.packStatus === 'failed' || p.packStatus === 'cancelled'
             ? `<button type="button" data-retry-project="${p.id}">重新生成</button>`
             : '';
+        const continueBtn =
+          p.packStatus === 'partial' &&
+          p.packId &&
+          !(typeof GenDock !== 'undefined' && GenDock.isBusy?.() && GenDock.getActiveProjectId?.() === p.id)
+            ? `<button type="button" data-continue-project="${p.id}">继续补全</button>`
+            : '';
         const stopBtn =
-          p.packStatus === 'generating'
+          p.packStatus === 'generating' ||
+          (p.packStatus === 'partial' &&
+            typeof GenDock !== 'undefined' &&
+            GenDock.isBusy?.() &&
+            GenDock.getActiveProjectId?.() === p.id)
             ? `<button type="button" data-stop-project="${p.id}">停止生成</button>`
             : '';
         const hubBtn = (() => {
-          if (p.packStatus === 'generating' || p.packStatus === 'failed' || p.packStatus === 'cancelled') return '';
+          if (
+            p.packStatus === 'generating' ||
+            p.packStatus === 'partial' ||
+            p.packStatus === 'failed' ||
+            p.packStatus === 'cancelled'
+          ) {
+            return '';
+          }
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
           const pack = typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
           if (pack?.hub?.navigation?.length) return '';
           return `<button type="button" data-hub-project="${p.id}">生成阅读与术语</button>`;
         })();
         const matsBtn = (() => {
-          if (p.packStatus === 'generating' || p.packStatus === 'failed' || p.packStatus === 'cancelled') return '';
+          if (
+            p.packStatus === 'generating' ||
+            p.packStatus === 'partial' ||
+            p.packStatus === 'failed' ||
+            p.packStatus === 'cancelled'
+          ) {
+            return '';
+          }
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
           const pack = typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
           if (!pack?.plan?.length) return '';
@@ -4759,6 +4859,14 @@
         const demoNote = isDemo
           ? '<p class="pc-note">用来演示知径怎么用；真正学习请新建自己的路径。</p>'
           : '';
+        const openLabel =
+          p.packStatus === 'generating'
+            ? '准备中'
+            : p.packStatus === 'partial'
+              ? '先开始学'
+              : isDemo
+                ? '试用展示'
+                : '开始学习';
         return `
           <article class="project-card${isDemo ? ' is-demo' : ''}" data-open-project="${p.id}" role="button" tabindex="0">
             ${badge}
@@ -4771,8 +4879,9 @@
             </div>
             <div class="pc-bar"><span style="width:${pct}%"></span></div>
             <div class="pc-actions">
-              <button type="button" data-open-project="${p.id}">${p.packStatus === 'generating' ? '准备中' : isDemo ? '试用展示' : '开始学习'}</button>
+              <button type="button" data-open-project="${p.id}">${openLabel}</button>
               ${stopBtn}
+              ${continueBtn}
               ${retryBtn}
               ${hubBtn}
               ${matsBtn}
@@ -4822,7 +4931,7 @@
         return;
       }
       if (project.packStatus === 'generating') {
-        alert('专属课表还在准备中。可点右下角进度或卡片上的「停止生成」。');
+        alert('专属课表还在准备前几天内容。可点右下角进度，或稍等「可先学」出现后再进。');
         GenDock.setExpanded?.(true);
         return;
       }
@@ -4834,6 +4943,7 @@
         }
         return;
       }
+      // partial / ready / builtin → 可进入（partial 时仅前几天内容完整）
 
       ProjectPlatform.setActive(project.id);
       ProjectPlatform.touch(project.id);
@@ -4957,6 +5067,8 @@
       let lastMsg = '';
       let abortCtrl = null;
       let activeProjectId = null;
+      let skeletonReady = false;
+      let hadSkeleton = false;
 
       function els() {
         return {
@@ -4968,6 +5080,7 @@
           status: document.getElementById('gen-pack-status'),
           bar: document.getElementById('gen-pack-bar'),
           log: document.getElementById('gen-dock-log'),
+          hint: document.getElementById('gen-dock-hint'),
           actions: document.getElementById('gen-dock-actions'),
           openBtn: document.getElementById('gen-dock-open'),
           dismissBtn: document.getElementById('gen-dock-dismiss'),
@@ -5004,26 +5117,55 @@
         if (status && msg) status.textContent = msg;
         if (bar) bar.style.width = `${n}%`;
         if (fabPct) fabPct.textContent = `${Math.round(n)}%`;
-        if (fabLabel && busy) fabLabel.textContent = '生成中';
+        if (fabLabel && busy) {
+          fabLabel.textContent = skeletonReady ? '可先学' : '生成中';
+        }
         if (msg) appendLog(msg);
       }
 
       function start(title, projectId = null) {
         busy = true;
+        skeletonReady = false;
+        hadSkeleton = false;
         openProjectId = null;
         activeProjectId = projectId || null;
         lastMsg = '';
         abortCtrl = new AbortController();
-        const { root, fab, fabLabel, title: titleEl, log, actions, openBtn } = els();
+        const { root, fab, fabLabel, title: titleEl, log, actions, openBtn, hint } = els();
         if (log) log.innerHTML = '';
         if (titleEl) titleEl.textContent = title || '正在准备课表';
         if (fabLabel) fabLabel.textContent = '生成中';
+        if (hint) hint.textContent = '可继续浏览其它路径或功能，生成在后台进行。';
         fab?.classList.remove('is-done', 'is-error');
+        root?.classList.remove('is-skeleton-ready');
         actions?.classList.remove('is-visible');
-        if (openBtn) openBtn.hidden = true;
+        if (openBtn) {
+          openBtn.hidden = true;
+          openBtn.textContent = '打开路径';
+        }
         root?.classList.add('is-visible', 'is-busy');
         setExpanded(true);
-        progress('已开始，可点「停止生成」随时中断…', 1);
+        progress('已开始：先准备前几天可学内容…', 1);
+      }
+
+      function markSkeletonReady(projectId, readyThroughDay = 3) {
+        skeletonReady = true;
+        hadSkeleton = true;
+        openProjectId = projectId || openProjectId || activeProjectId;
+        const { root, fabLabel, openBtn, actions, hint, title } = els();
+        root?.classList.add('is-skeleton-ready');
+        actions?.classList.add('is-visible');
+        if (fabLabel && busy) fabLabel.textContent = '可先学';
+        if (title) title.textContent = `前 ${readyThroughDay} 天已可学`;
+        if (hint) {
+          hint.textContent = `Day 1–${readyThroughDay} 已就绪，可先打开学习；其余天数继续在后台补全。`;
+        }
+        if (openBtn) {
+          openBtn.hidden = !openProjectId;
+          openBtn.textContent = '先开始学';
+        }
+        appendLog(`骨架就绪：Day 1–${readyThroughDay} 可学，继续补全中…`);
+        setExpanded(true);
       }
 
       function getSignal() {
@@ -5032,6 +5174,10 @@
 
       function getActiveProjectId() {
         return activeProjectId;
+      }
+
+      function hadSkeletonReady() {
+        return hadSkeleton;
       }
 
       function requestStop() {
@@ -5050,17 +5196,19 @@
 
       function finishOk({ message, projectId } = {}) {
         busy = false;
+        skeletonReady = false;
         abortCtrl = null;
         activeProjectId = null;
         openProjectId = projectId || null;
-        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title } = els();
-        root?.classList.remove('is-busy');
+        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title, hint } = els();
+        root?.classList.remove('is-busy', 'is-skeleton-ready');
         fab?.classList.add('is-done');
         fab?.classList.remove('is-error');
         if (fabLabel) fabLabel.textContent = '已完成';
         if (fabPct) fabPct.textContent = '100%';
         if (title) title.textContent = '生成完成';
-        if (status) status.textContent = message || '内容已就绪。';
+        if (status) status.textContent = message || '课表已就绪。';
+        if (hint) hint.textContent = '可继续浏览，或打开路径开始学习。';
         appendLog(message || '生成完成');
         const { bar } = els();
         if (bar) bar.style.width = '100%';
@@ -5074,11 +5222,12 @@
 
       function finishError(message) {
         busy = false;
+        skeletonReady = false;
         abortCtrl = null;
         activeProjectId = null;
         openProjectId = null;
         const { root, fab, fabLabel, fabPct, actions, openBtn, status, title } = els();
-        root?.classList.remove('is-busy');
+        root?.classList.remove('is-busy', 'is-skeleton-ready');
         fab?.classList.add('is-error');
         fab?.classList.remove('is-done');
         if (fabLabel) fabLabel.textContent = '失败';
@@ -5091,31 +5240,36 @@
         setExpanded(true);
       }
 
-      function finishCancelled(message) {
+      function finishCancelled(message, { keepOpenProjectId = null } = {}) {
         busy = false;
+        skeletonReady = false;
         abortCtrl = null;
         activeProjectId = null;
-        openProjectId = null;
+        openProjectId = keepOpenProjectId || null;
         const { root, fab, fabLabel, fabPct, actions, openBtn, status, title, bar } = els();
-        root?.classList.remove('is-busy');
+        root?.classList.remove('is-busy', 'is-skeleton-ready');
         fab?.classList.add('is-error');
         fab?.classList.remove('is-done');
-        if (fabLabel) fabLabel.textContent = '已停止';
-        if (fabPct) fabPct.textContent = '—';
-        if (title) title.textContent = '已停止生成';
+        if (fabLabel) fabLabel.textContent = keepOpenProjectId ? '已保留' : '已停止';
+        if (fabPct) fabPct.textContent = keepOpenProjectId ? '…' : '—';
+        if (title) title.textContent = keepOpenProjectId ? '已停止补全' : '已停止生成';
         if (status) status.textContent = message || '已按你的操作停止。可点「重新生成」再试。';
-        if (bar) bar.style.width = '0%';
+        if (bar) bar.style.width = keepOpenProjectId ? '36%' : '0%';
         appendLog(message || '已停止生成');
         actions?.classList.add('is-visible');
-        if (openBtn) openBtn.hidden = true;
+        if (openBtn) {
+          openBtn.hidden = !openProjectId;
+          openBtn.textContent = keepOpenProjectId ? '先开始学' : '打开路径';
+        }
         setExpanded(true);
       }
 
       function hide() {
         const { root } = els();
-        root?.classList.remove('is-visible', 'is-expanded', 'is-busy');
+        root?.classList.remove('is-visible', 'is-expanded', 'is-busy', 'is-skeleton-ready');
         expanded = false;
         busy = false;
+        skeletonReady = false;
         openProjectId = null;
         activeProjectId = null;
         abortCtrl = null;
@@ -5136,12 +5290,17 @@
         stopBtn?.addEventListener('click', (e) => {
           e.stopPropagation();
           if (!busy) return;
-          if (!confirm('确定停止当前课表生成？已生成的部分不会写入。')) return;
+          const msg = hadSkeleton
+            ? '停止补全？前几天已可学的内容会保留。'
+            : '确定停止当前课表生成？尚未就绪的部分不会写入。';
+          if (!confirm(msg)) return;
           requestStop();
         });
         openBtn?.addEventListener('click', () => {
           const id = openProjectId;
-          hide();
+          const keepBusy = busy && skeletonReady;
+          if (!keepBusy) hide();
+          else setExpanded(false);
           if (id) {
             renderProjectsHome();
             enterProject(id);
@@ -5152,6 +5311,7 @@
       return {
         start,
         progress,
+        markSkeletonReady,
         finishOk,
         finishError,
         finishCancelled,
@@ -5162,11 +5322,22 @@
         getSignal,
         getActiveProjectId,
         requestStop,
+        hadSkeletonReady,
       };
     })();
 
     function setGenProgress(msg, pct) {
       GenDock.progress(msg, pct);
+      if (typeof ContentPack !== 'undefined' && ContentPack.reloadActive) {
+        const activeId = ProjectPlatform.getActiveId?.() || activeProject?.id;
+        const genId = GenDock.getActiveProjectId?.();
+        if (activeId && genId && activeId === genId) {
+          ContentPack.reloadActive();
+          if (document.body.classList.contains('mode-workspace')) {
+            renderFillHint();
+          }
+        }
+      }
     }
 
     async function runAiPackGeneration(project) {
@@ -5196,7 +5367,21 @@
             notes: project.notes || '',
           },
           setGenProgress,
-          { signal: GenDock.getSignal() }
+          {
+            signal: GenDock.getSignal(),
+            skeletonDays: 3,
+            onSkeletonReady: (skel) => {
+              ProjectPlatform.update(project.id, {
+                packId: skel.id,
+                packStatus: 'partial',
+                title: skel.meta?.title || project.title,
+                days: skel.meta?.days || project.days,
+              });
+              renderProjectsHome();
+              const n = skel.meta?.generation?.readyThroughDay || 3;
+              GenDock.markSkeletonReady(project.id, n);
+            },
+          }
         );
         ProjectPlatform.update(project.id, {
           packId: pack.id,
@@ -5205,21 +5390,100 @@
           days: pack.meta?.days || project.days,
         });
         renderProjectsHome();
+        if (typeof ContentPack !== 'undefined') ContentPack.reloadActive?.();
+        if (document.body.classList.contains('mode-workspace')) renderFillHint();
         GenDock.finishOk({
-          message: '课表与知识库已就绪。可继续浏览，或点「打开路径」开始学习。',
+          message: '课表与知识库已全部就绪。可继续浏览，或点「打开路径」开始学习。',
           projectId: project.id,
         });
       } catch (err) {
         console.error(err);
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
+          if (GenDock.hadSkeletonReady()) {
+            const cur = ProjectPlatform.get(project.id);
+            if (cur?.packId) {
+              ProjectPlatform.update(project.id, { packStatus: 'partial' });
+              renderProjectsHome();
+              GenDock.finishCancelled(
+                '已停止补全。前几天仍可学习，需要时点「继续补全」。',
+                { keepOpenProjectId: project.id }
+              );
+              return;
+            }
+          }
           ProjectPlatform.update(project.id, { packStatus: 'cancelled' });
           renderProjectsHome();
           GenDock.finishCancelled('已停止生成。可点路径上的「重新生成」再试。');
           return;
         }
+        if (GenDock.hadSkeletonReady()) {
+          const cur = ProjectPlatform.get(project.id);
+          if (cur?.packId) {
+            ProjectPlatform.update(project.id, { packStatus: 'partial' });
+            renderProjectsHome();
+            GenDock.finishError(
+              '补全未完成：' + (err.message || '未知错误') + '。前几天仍可学，可点「继续补全」。'
+            );
+            return;
+          }
+        }
         ProjectPlatform.update(project.id, { packStatus: 'failed' });
         renderProjectsHome();
         GenDock.finishError('生成失败：' + (err.message || '未知错误'));
+        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
+          AiReview.openSettingsModal?.();
+        }
+      }
+    }
+
+    async function continueFillPack(projectId) {
+      const project = ProjectPlatform.get(projectId);
+      if (!project?.packId) return;
+      if (GenDock.isBusy()) {
+        alert('已有任务在生成中，请稍候完成后再试。也可先点「停止生成」。');
+        GenDock.setExpanded(true);
+        return;
+      }
+      ProjectPlatform.update(projectId, { packStatus: 'partial' });
+      renderProjectsHome();
+      GenDock.start(`补全「${project.title || '学习路径'}」`, project.id);
+      GenDock.markSkeletonReady(
+        project.id,
+        ContentPack.load(project.packId)?.meta?.generation?.readyThroughDay || 3
+      );
+      try {
+        if (!AiReview.hasApiKey()) {
+          throw Object.assign(new Error('请先开启智能功能'), { code: 'NO_KEY' });
+        }
+        const pack = await PackGenerator.continueFillForPack(project.packId, setGenProgress, {
+          signal: GenDock.getSignal(),
+        });
+        ProjectPlatform.update(project.id, {
+          packId: pack.id,
+          packStatus: 'ready',
+          title: pack.meta?.title || project.title,
+          days: pack.meta?.days || project.days,
+        });
+        renderProjectsHome();
+        ContentPack.reloadActive?.();
+        if (document.body.classList.contains('mode-workspace')) renderFillHint();
+        GenDock.finishOk({
+          message: '其余课表已补全，全部就绪。',
+          projectId: project.id,
+        });
+      } catch (err) {
+        console.error(err);
+        if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
+          ProjectPlatform.update(project.id, { packStatus: 'partial' });
+          renderProjectsHome();
+          GenDock.finishCancelled('已停止补全。前几天仍可学习。', {
+            keepOpenProjectId: project.id,
+          });
+          return;
+        }
+        ProjectPlatform.update(project.id, { packStatus: 'partial' });
+        renderProjectsHome();
+        GenDock.finishError('继续补全失败：' + (err.message || '未知错误'));
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
         }
@@ -5461,6 +5725,13 @@
           retryGeneratePack(retry.getAttribute('data-retry-project'));
           return;
         }
+        const cont = e.target.closest('[data-continue-project]');
+        if (cont) {
+          e.preventDefault();
+          e.stopPropagation();
+          continueFillPack(cont.getAttribute('data-continue-project'));
+          return;
+        }
         const stopGen = e.target.closest('[data-stop-project]');
         if (stopGen) {
           e.preventDefault();
@@ -5469,7 +5740,10 @@
             alert('当前没有正在进行的生成任务。');
             return;
           }
-          if (!confirm('确定停止当前课表生成？')) return;
+          const msg = GenDock.hadSkeletonReady?.()
+            ? '停止补全？前几天已可学的内容会保留。'
+            : '确定停止当前课表生成？';
+          if (!confirm(msg)) return;
           GenDock.requestStop();
           GenDock.setExpanded(true);
           return;
@@ -5826,6 +6100,7 @@
     window.switchView = switchView;
 
     function renderAll() {
+      renderFillHint();
       renderDayCard();
       renderStats();
       renderCalendar();

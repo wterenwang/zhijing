@@ -198,6 +198,7 @@ const MascotCompanion = (() => {
         topic: '',
       };
     }
+    // partial 与 ready 一样可学（仅前几天内容完整）
 
     const { checked, total } = ProjectPlatform.progressStats(project.id);
     const data = loadProjectData(project.id) || {};
@@ -350,13 +351,14 @@ const MascotCompanion = (() => {
     const ready = snaps.filter((s) => s.ready);
     const incomplete = ready.filter((s) => !s.allDone);
     const generating = snaps.filter((s) => s.status === 'generating');
+    const partial = snaps.filter((s) => s.status === 'partial');
     const ctaSnap = pickCtaSnap(snaps, focusId);
     const checklist = buildAggregateChecklist(snaps, focusId);
     const project = ctaSnap?.project || focusProject || snaps[0]?.project || null;
     const hour = new Date().getHours();
     const pathNames = incomplete.map((s) => s.name).slice(0, 3);
 
-    if (!ready.length && generating.length) {
+    if (!ready.length && generating.length && !partial.length) {
       return {
         kind: 'generating',
         project: generating[0].project,
@@ -364,9 +366,9 @@ const MascotCompanion = (() => {
         pathSnaps: snaps,
         messages: [
           generating.length > 1
-            ? `有 ${generating.length} 条路径还在生成课表，径径先帮你看着～`
-            : `「${generating[0].name}」还在准备中，径径先帮你看着进度～`,
-          '课表生成中…可以先去别处逛逛，好了径径再叫你！',
+            ? `有 ${generating.length} 条路径还在准备前几天内容，径径先帮你看着～`
+            : `「${generating[0].name}」还在准备前几天，马上就能先学～`,
+          '先等骨架就绪，其余课表后台补就好～',
         ],
         cta: null,
         checklist,
@@ -481,10 +483,27 @@ const MascotCompanion = (() => {
         kind: 'generating',
         project,
         messages: [
-          `「${project.shortName || project.title}」还在准备中，径径先帮你看着进度～`,
-          '课表生成中…可以先去别处逛逛，好了径径再叫你！',
+          `「${project.shortName || project.title}」还在准备前几天内容，径径先帮你看着进度～`,
+          '马上就能先学 Day1–3，其余课表后台慢慢补～',
         ],
         cta: null,
+        checklist: null,
+      };
+    }
+
+    if (project.packStatus === 'partial') {
+      const readyN =
+        (project.packId && typeof ContentPack !== 'undefined'
+          ? ContentPack.load(project.packId)?.meta?.generation?.readyThroughDay
+          : null) || 3;
+      return {
+        kind: 'partial',
+        project,
+        messages: [
+          `「${project.shortName || project.title}」前 ${readyN} 天已可学，点进去开干！`,
+          '其余天数还在后台补全，不影响你先打卡～',
+        ],
+        cta: { label: '先开始学', action: 'open', projectId: project.id },
         checklist: null,
       };
     }
@@ -1027,6 +1046,7 @@ const MascotCompanion = (() => {
       case 'empty':
         return 'peek';
       case 'generating':
+      case 'partial':
       case 'failed':
         return 'think';
       default:

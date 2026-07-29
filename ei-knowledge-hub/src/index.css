@@ -5,7 +5,7 @@
   --font-mono: ui-monospace, Consolas, monospace;
   --color-brand: #0891b2;
   --color-brand-light: #ecfeff;
-  --color-surface: #f0f4f8;
+  --color-surface: #f8fafc;
   --color-border: #e2e8f0;
 }
 
@@ -18,6 +18,34 @@ body {
   font-family: var(--font-sans);
   background: var(--color-surface);
   color: #1e293b;
+}
+
+::selection {
+  background: #cffafe;
+  color: #164e63;
+}
+
+.glossary-grid {
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 .prose-doc h1 {

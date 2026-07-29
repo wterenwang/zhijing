@@ -123,8 +123,9 @@ const PackGenerator = (() => {
   const GLOSSARY_FROM_HUB_CONTRACT = `术语库定位（必须遵守）：
 1. 术语库是知识库的补充层：解释日课里已经出现或当日必须会用的概念。
 2. 禁止发明知识库正文中完全未出现、且与课表 topic 无关的新体系名词。
-3. 每条词写清：工作定义、别这样叫、岗位判断、与相近概念区别、面试口述；补日课没写透的部分。
-4. term 字符串应尽量与知识库正文用词一致（便于互链检索）。`;
+3. 每条词必须讲清楚：非循环工作定义、真实口语、完整例子、易混边界、专属可视化（visual.kind）。
+4. term 字符串应尽量与知识库正文用词一致（便于互链检索）。
+5. 宁少勿滥：不合格词条宁可不写，禁止用通用模板充数。`;
 
   /** 按岗位生成视角文案，避免写死「PM」 */
   function roleLens(meta) {
@@ -1529,24 +1530,58 @@ ${lockedPhase}
   }
 
   /**
-   * Prompt 设计参考（PROMPT_VER=2026-07-15s，find-skills 强化）：
-   * - OpenAI/Anthropic：指令在前、分隔符分区、任务最后；Few-shot；结构化 JSON
-   * - davila7/prompt-engineer：Role→Instructions→Constraints(含 DON'T)→Output→Examples
-   * - mattpocock/teach：Mission 锚定；Glossary=压缩参考（定义 IS 非 HOW）；aliases 通行名；
-   *   「别这样叫」压歧义；lesson=短小可完成+一个可感知赢；知识先易、技能用提取练习建存储强度
-   * - obsidian-notes / knowledge-site：动机→直觉→类比→定义；一句话摘要便于闪卡
-   * - awesome-copilot/educational-comments：解释 why，不只罗列 what
+   * Prompt 设计参考（PROMPT_VER=2026-07-28b）：
+   * - 对标可视化术语图鉴：口语切入、专属示意图、易混边界、完整例子
+   * - visual.kind 由模型按概念选型，禁止全词共用通用四格
    */
+  const GLOSSARY_VISUAL_KINDS = `visual.kind 必须从下列择一（同批术语尽量用不同 kind）：
+- flow：方法/流程/链路（nodes=有序步骤，label+detail）
+- loop：飞轮/闭环/正反馈（nodes=回环节点，caption 说明如何回流）
+- anatomy：文档结构/组件组成（nodes=部件名+职责）
+- roles：多方协作如用户/应用/模型（nodes 必填 actor）
+- scenario：需要「看见长什么样」（quote+facts 事实卡+nodes 大纲+caption）
+- compare：两个方案/概念并排对比（columns=两列标题，nodes 用 group 归列）
+- states：状态机/生命周期（nodes 按变化顺序，badge 写状态名或触发条件）
+- layers：系统分层/技术栈（nodes 从表层到基础层排列）
+- tree：层级/分类/组成树（首个 node 为根；其余可用 parent 指向父节点）
+- timeline：阶段演进/发布过程（nodes 按时间顺序，badge 写时间点或阶段）
+- matrix：二维判断/情境选择（columns=2–4 个象限标题，nodes 用 group 归类）
+禁止 visual.nodes/steps 写成「日课场景→识别术语→判断边界→形成行动」这类通用于任何词的模板。`;
+
   const GLOSSARY_FEWSHOT = {
     term: '数据飞轮',
     aliases: ['Data Flywheel'],
     module: '产品',
-    definition: '用户使用数据持续回流并驱动下一轮产品/模型改进的正反馈循环。',
+    definition: '用户使用产生的数据持续回流、驱动下一轮产品/模型改进，并使体验与用量互相加速的正反馈循环。',
+    userPhrases: ['我们已经埋了很多点、数据也很多，为什么产品还是没有越用越好？'],
+    example:
+      '智能客服上线后：用户提问→会话与满意度回流→意图模型每周重训→回答更准→提问量上升。若只有埋点看板、没有重训与上线节奏，则不算飞轮。',
+    visual: {
+      kind: 'loop',
+      title: '数据飞轮如何转起来',
+      nodes: [
+        { label: '用户使用', detail: '产生可回流的行为/结果数据' },
+        { label: '数据回流', detail: '清洗、标注、入库，进入训练队列' },
+        { label: '模型/产品改进', detail: '按周发布可感知的提升' },
+        { label: '体验更好', detail: '带来更多使用，下一圈加速' },
+      ],
+      caption: '每一圈必须有可运营的回流与发布；只采不训≠飞轮。',
+    },
+    confusions: [
+      {
+        term: '数据闭环',
+        distinction: '闭环强调采集→训练→部署链路完整；飞轮还要求每圈正反馈并加速用量/质量。',
+      },
+      {
+        term: '埋点',
+        distinction: '埋点只是采集动作；没有回流改进与发布节奏，就没有飞轮。',
+      },
+    ],
     sections: [
       {
         label: '是什么',
         content:
-          '不是「有很多数据」本身，而是采集→清洗→训练→部署→再采集的链路能转、且回流可运营。后文「数据闭环」指这条工程链路。',
+          '不是「有很多数据」本身，而是采集→清洗→训练→部署→再采集能转、且回流可运营。',
       },
       {
         label: '别这样叫',
@@ -1558,17 +1593,107 @@ ${lockedPhase}
           '1）新功能是否贡献可回流数据？\\n2）权限/激励是否挡回流？\\n3）迭代节奏是否跟上反馈？\\n4）冷启动靠什么撬第一圈？',
       },
       {
-        label: '和相近概念的区别',
-        content:
-          '· 数据闭环：链路完整；飞轮：正反馈加速\\n· 简单埋点：有采集无回流迭代≠飞轮',
-      },
-      {
         label: '面试怎么答',
         content:
           '一句话：飞轮是「越好用→越好数据→更好产品」的可运营闭环。再补：冷启动靠种子场景/补贴数据，不是等自然增长。',
       },
     ],
   };
+
+  const GLOSSARY_FEWSHOT_SCENARIO = {
+    term: 'PRD',
+    aliases: ['产品需求文档', 'Product Requirements Document'],
+    module: '方法',
+    definition: '写清用户问题、目标、范围与成功标准，帮助产品/设计/研发对齐「做什么、做到什么算完」的需求文档。',
+    userPhrases: ['我想把要做的东西写清楚：解决什么问题、做到什么程度算完。'],
+    example:
+      '「会议纪要导出」：背景写清每周 6+ 场会、整理纪要约 40 分钟；目标是一键导出；范围含导出 PDF，不含自动纪要生成；验收为导出耗时 <10 秒且字段齐全。',
+    visual: {
+      kind: 'scenario',
+      title: '一份可协作的 PRD 长什么样',
+      quote: '每周开完 6 场会，光整理纪要发出去就要 40 分钟。',
+      facts: [
+        { label: '会议频率', value: '6+ 场/周' },
+        { label: '整理耗时', value: '约 40 分钟' },
+        { label: '相关人数', value: '3 人核对' },
+      ],
+      nodes: [
+        { label: '背景与问题', detail: '事实与假设分开写' },
+        { label: '目标与指标', detail: '怎样算有效' },
+        { label: '范围与非目标', detail: '这次不做的也写清' },
+        { label: '验收标准', detail: '可测试的完成条件' },
+      ],
+      caption: 'PRD 对齐判断，不必先写死技术实现。',
+    },
+    confusions: [
+      {
+        term: 'Roadmap',
+        distinction: 'Roadmap 讲时间与优先级排序；PRD 讲某一需求的问题、范围与验收。',
+      },
+      {
+        term: '技术方案',
+        distinction: '技术方案讲怎么实现；PRD 讲做什么、为何做、做到什么算完。',
+      },
+    ],
+    sections: [
+      {
+        label: '是什么',
+        content: '对齐「问题—目标—范围—验收」的合同式文档，服务跨角色协作。',
+      },
+      {
+        label: '岗位要会的判断',
+        content: '别人不追问能否开工？非目标是否写清？成功标准是否可观测？',
+      },
+      {
+        label: '面试怎么答',
+        content: '先给工作定义，再举一个含非目标与验收的短例子。',
+      },
+    ],
+  };
+
+  const GLOSSARY_VISUAL_FEWSHOTS = [
+    {
+      term: 'MVP',
+      visual: {
+        kind: 'compare',
+        title: '完整产品与最小验证版本的差别',
+        columns: ['完整产品', 'MVP'],
+        nodes: [
+          { group: '完整产品', label: '覆盖主要场景', detail: '功能完整，面向规模化使用' },
+          { group: '完整产品', label: '持续运营', detail: '兼顾体验、成本与稳定性' },
+          { group: 'MVP', label: '只验证最大风险', detail: '保留能检验核心假设的最小功能' },
+          { group: 'MVP', label: '快速拿证据', detail: '用真实行为决定继续、调整或停止' },
+        ],
+        caption: 'MVP 最小的是验证范围，不是质量底线。',
+      },
+    },
+    {
+      term: '状态',
+      visual: {
+        kind: 'states',
+        title: '一次保存怎样经过四种状态',
+        nodes: [
+          { badge: '默认', label: '等待输入', detail: '页面尚未发生变化' },
+          { badge: '保存中', label: '请求已发出', detail: '按钮禁用，避免重复提交' },
+          { badge: '成功', label: '数据已持久化', detail: '展示明确成功反馈' },
+          { badge: '失败', label: '保留用户输入', detail: '说明原因并允许重试' },
+        ],
+      },
+    },
+    {
+      term: 'Web 技术栈',
+      visual: {
+        kind: 'layers',
+        title: '一次页面请求经过哪些层',
+        nodes: [
+          { label: '界面层', detail: '用户看到并操作的页面' },
+          { label: '应用层', detail: '校验输入并组织业务逻辑' },
+          { label: '服务层', detail: '处理 API 与权限' },
+          { label: '数据层', detail: '持久化与读取数据' },
+        ],
+      },
+    },
+  ];
 
   // ─── ③ 术语：从知识库抽词 → 分批精写（补充日课，禁止另起炉灶） ───
 
@@ -1732,52 +1857,151 @@ ${JSON.stringify({
       ),
     };
     const termQueries = (termBatch || [])
-      .slice(0, 3)
-      .map((t) => `${meta.industry} ${t.term || t} 定义 含义`);
+      .slice(0, 2)
+      .map((t) => `${meta.industry} ${t.term || t} 定义 含义 区别`);
     const searchHits = hasSearchKey()
-      ? await searchMany(termQueries, { count: 5, maxQueries: 3 })
+      ? await searchMany(termQueries, { count: 5, maxQueries: 2 })
       : [];
     const hubSources = pack?.hub?.chapters ? hubExcerptsForTerms(pack, termBatch) : [];
 
     const system = `你是术语教学设计师与「${meta.industry}」资深「${role}」教练。
-Mission：每条词做成可背诵、可判断、可面试的参照；补充知识库日课未写透的定义与易混点。
+Mission：每条词必须把概念讲清楚——读者看完能：说准定义、举完整例子、区分易混、看懂专属示意图。
 ${GLOSSARY_FROM_HUB_CONTRACT}
 ${DEPTH_CONTRACT}
-若有 search_results：定义须与资料一致的方向，禁止编造搜索未支持的精确数据/年份。
+${GLOSSARY_VISUAL_KINDS}
+若有 search_results：定义须与资料方向一致，禁止编造搜索未支持的精确数据/年份。
 输出契约：仅输出一个合法 JSON 对象。`;
     const user = `## Audience
 岗位：${role}｜行业：${meta.industry}｜目标：${meta.goal || '入门'}
 
-## 本批要写的词（不得增删词头，可微调别名；term 尽量与知识库一致）
+## 本批要写的词（不得增删词头；term 尽量与知识库一致；本批最多 2 个）
 ${JSON.stringify(termBatch)}
 
 ## 知识库出处（优先据此补充，而不是另起定义）
 ${JSON.stringify(hubSources).slice(0, 6000)}
 
 ## search_results
-${formatSearchBlock(searchHits, 16)}
+${formatSearchBlock(searchHits, 12)}
 
-## Example
-${JSON.stringify({ glossary: [glossaryFewshot] })}
+## 完整词条示例（模仿其深度，勿抄行业）
+${JSON.stringify({ glossary: [glossaryFewshot, GLOSSARY_FEWSHOT_SCENARIO] })}
+
+## 额外可视化选型示例（只学习布局与字段）
+${JSON.stringify(GLOSSARY_VISUAL_FEWSHOTS)}
 
 ## Output schema
-{"glossary":[{"term":"","aliases":[],"module":"","definition":"","sections":[{"label":"是什么","content":""},{"label":"别这样叫","content":""},{"label":"${judgmentLabel}","content":""},{"label":"和相近概念的区别","content":""},{"label":"面试怎么答","content":""}]}]}
+{"glossary":[{"term":"","aliases":[],"module":"","definition":"","userPhrases":["真实口语"],"example":"含对象+动作+结果的完整例子","visual":{"kind":"flow|loop|anatomy|roles|scenario|compare|states|layers|tree|timeline|matrix","title":"","columns":["compare/matrix可选"],"nodes":[{"label":"","detail":"","actor":"roles可选","badge":"状态/阶段可选","group":"compare/matrix可选","parent":"tree可选"}],"facts":[{"label":"","value":""}],"quote":"scenario用","caption":""},"confusions":[{"term":"易混词","distinction":"本词是…；对方是…"}],"sections":[{"label":"是什么","content":""},{"label":"别这样叫","content":""},{"label":"${judgmentLabel}","content":""},{"label":"面试怎么答","content":""}]}]}
 
-## Constraints
-- definition ≤45 字，工作定义不是口号；应能回指日课场景
-- sections 至少含：是什么、${judgmentLabel}、面试怎么答；尽量含「别这样叫」「和相近概念的区别」
-- 判断问题要贴 ${role} 日常取舍；面试答可 30-45 秒口述
+## Constraints（违反任一条=不合格）
+- definition 20–70 字：说清是什么/解决什么；禁止「××的工作定义」「××是××相关概念」循环空话
+- userPhrases：1–2 句真实困惑/任务/误表述；禁止「我在日课里遇到××」
+- example：必须有具体对象、动作、可观察结果；禁止只复述 definition
+- confusions：至少 1 条真正相近的词，distinction 写双边边界
+- visual：先按概念结构选 kind，再写本词专属节点；同批尽量不同 kind；nodes 2–6 个，每项 label≤16 字、detail≤36 字；compare/matrix 必须用 group 归列，roles 必须有 actor
+- sections 至少含：是什么、${judgmentLabel}、面试怎么答
 - 禁止写「PM 视角」标签（除非岗位是产品经理）
-- 若有知识库出处：补充日课没展开的边界/易混/口述，不要重复粘贴整章`;
-    const data = await chatJson({ system, user, temperature: 0.22, max_tokens: 5500 });
+- 若有知识库出处：补充边界/易混/例子，不要整章粘贴`;
+    const data = await chatJson({ system, user, temperature: 0.18, max_tokens: 4500 });
     return normalizeGlossary(data.glossary || data, meta);
+  }
+
+  function isGenericGlossaryVisual(visual, term) {
+    const blob = [
+      visual?.title,
+      ...(visual?.steps || []),
+      ...(visual?.nodes || []).flatMap((n) => [n.label, n.detail]),
+    ]
+      .join(' ')
+      .toLowerCase();
+    const generic =
+      /日课场景|识别「|识别术语|判断适用边界|形成可验证行动|从概念到行动|从问题到判断/.test(
+        blob
+      );
+    const mentionsTerm = String(term || '').length >= 2 && blob.includes(String(term).toLowerCase());
+    // 通用四格且几乎不提本词 → 不合格
+    return generic && !mentionsTerm;
+  }
+
+  function isCircularGlossaryDefinition(term, definition) {
+    const d = String(definition || '').trim();
+    const t = String(term || '').trim();
+    if (d.length < 18) return true;
+    if (/的工作定义|的基本定义|相关概念总称|需建立可口述/.test(d)) return true;
+    if (t && new RegExp(`^${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(是|指的是)?$`).test(d)) {
+      return true;
+    }
+    // 「在「行业」语境下，岗位的职责边界与核心产出的工作定义」类 stub
+    if (/语境下.{0,12}(职责边界|核心产出).{0,8}工作定义/.test(d)) return true;
+    if (/日课中出现的「/.test(d) && /使用边界/.test(d)) return true;
+    return false;
+  }
+
+  function isTemplateUserPhrase(phrase) {
+    const p = String(phrase || '');
+    return /我在日课里(遇到|看到)/.test(p) || /实际工作中该怎么(判断和使用|理解和使用)/.test(p);
+  }
+
+  /** 语义质量门禁：不过关不得入库 */
+  function passesGlossaryQuality(entry) {
+    if (!entry?.term || !entry?.definition) return false;
+    if (isCircularGlossaryDefinition(entry.term, entry.definition)) return false;
+    const phrase = (entry.userPhrases || [])[0] || '';
+    if (!phrase || isTemplateUserPhrase(phrase)) return false;
+    const example = String(entry.example || '').trim();
+    if (example.length < 24) return false;
+    if (example === entry.definition || example.includes(entry.definition.slice(0, 20))) {
+      // 允许部分重叠，但例子不能几乎等于定义
+      if (example.length < entry.definition.length + 12) return false;
+    }
+    if (!Array.isArray(entry.confusions) || entry.confusions.length < 1) return false;
+    const visual = entry.visual;
+    if (!visual) return false;
+    const allowedKinds = [
+      'flow',
+      'loop',
+      'anatomy',
+      'roles',
+      'scenario',
+      'compare',
+      'states',
+      'layers',
+      'tree',
+      'timeline',
+      'matrix',
+    ];
+    if (visual.kind && !allowedKinds.includes(visual.kind)) return false;
+    const nodeCount = (visual.nodes || []).length || (visual.steps || []).length;
+    if (nodeCount < 2 && !(visual.facts || []).length) return false;
+    if (visual.kind === 'roles' && (visual.nodes || []).some((node) => !node.actor)) return false;
+    if (visual.kind === 'states' && (visual.nodes || []).some((node) => !node.badge)) return false;
+    if (visual.kind === 'compare' || visual.kind === 'matrix') {
+      const groups = new Set((visual.nodes || []).map((node) => node.group).filter(Boolean));
+      if (groups.size < 2) return false;
+    }
+    if (isGenericGlossaryVisual(visual, entry.term)) return false;
+    return true;
+  }
+
+  function glossaryQualityStats(glossary) {
+    const list = Array.isArray(glossary) ? glossary : [];
+    const pass = list.filter(passesGlossaryQuality);
+    const kinds = new Set(
+      pass.map((g) => g.visual?.kind || 'flow').filter(Boolean)
+    );
+    return {
+      total: list.length,
+      passCount: pass.length,
+      failCount: list.length - pass.length,
+      kindCount: kinds.size,
+      kinds: [...kinds],
+      passRate: list.length ? pass.length / list.length : 0,
+    };
   }
 
   async function generateGlossary(meta, outline, onProgress, pack) {
     try {
       const listObj = await inventGlossaryTermList(meta, outline, pack);
       let terms = Array.isArray(listObj?.terms) ? listObj.terms : [];
-      // 有 hub 时：丢掉正文完全未出现的空降词（允许短别名命中）
       if (pack?.hub?.chapters) {
         const hub = hubBlobText(pack);
         const planBlob = JSON.stringify(pack.plan || []);
@@ -1785,149 +2009,112 @@ ${JSON.stringify({ glossary: [glossaryFewshot] })}
           const term = String(t.term || '').trim();
           if (!term) return false;
           if (hub.includes(term)) return true;
-          // 允许去掉后缀「模型/指标/评分」后再匹配
           const stem = term.replace(/(模型|指标|评分|方法|框架|体系)$/u, '');
           if (stem.length >= 2 && hub.includes(stem)) return true;
           return planBlob.includes(term) || planBlob.includes(stem);
         });
       }
+      // 宁少勿滥：最多精写 14 个
+      terms = terms.slice(0, 14);
       if (!terms.length) {
         return ensureGlossary(meta, outline, [], pack);
       }
-      const batchSize = 5;
+      const batchSize = 2;
       const batches = [];
       for (let i = 0; i < terms.length; i += batchSize) {
         batches.push(terms.slice(i, i + batchSize));
       }
-      const parts = await mapPool(
-        batches,
-        LLM_CONCURRENCY,
-        async (batch, i) => {
-          try {
-            return await expandGlossaryBatch(meta, outline, batch, pack);
-          } catch (e) {
-            console.warn('[PackGenerator] glossary batch failed', i, e);
-            return [];
-          }
-        },
-        (done, total) => {
-          if (onProgress) onProgress(`③ 术语分批精写 ${done}/${total}…`);
+      const accepted = [];
+      const seen = new Set();
+      for (let bi = 0; bi < batches.length; bi++) {
+        throwIfAborted();
+        const batch = batches[bi];
+        if (onProgress) onProgress(`③ 术语精写 ${Math.min((bi + 1) * batchSize, terms.length)}/${terms.length}…`);
+        let part = [];
+        try {
+          part = await expandGlossaryBatch(meta, outline, batch, pack);
+        } catch (e) {
+          console.warn('[PackGenerator] glossary batch failed', bi, e);
+          part = [];
         }
-      );
-      return ensureGlossary(meta, outline, parts.flat(), pack);
+        // 不合格词单独重试一次
+        const needRetry = batch.filter((t) => {
+          const term = String(t.term || t || '').trim();
+          return term && !part.some((g) => g.term === term && passesGlossaryQuality(g));
+        });
+        if (needRetry.length) {
+          try {
+            const retry = await expandGlossaryBatch(meta, outline, needRetry, pack);
+            part = [...part, ...retry];
+          } catch (e) {
+            console.warn('[PackGenerator] glossary retry failed', bi, e);
+          }
+        }
+        for (const g of part) {
+          const key = String(g.term || '').toLowerCase();
+          if (!key || seen.has(key)) continue;
+          if (!passesGlossaryQuality(g)) continue;
+          seen.add(key);
+          accepted.push(g);
+        }
+      }
+      return ensureGlossary(meta, outline, accepted, pack);
     } catch (e) {
-      console.warn('[PackGenerator] glossary generation failed, using role stub', e);
+      console.warn('[PackGenerator] glossary generation failed', e);
       return ensureGlossary(meta, outline, [], pack);
     }
   }
 
-  /** 按行业/岗位/知识库候选词合成兜底词条 */
+  /** 仅在几乎没有合格词时使用的最小种子——仍须过质量门；写具体定义而非循环 stub */
   function buildRoleStubGlossary(meta, outline, pack) {
     const { role, judgmentLabel } = roleLens(meta);
     const industry = String(meta.industry || '本行业').trim();
-    const goal = meta.goal || '入门';
-    const hubCandidates = [];
+    const hubTerms = [];
     if (pack?.hub?.chapters) {
       summarizeHubForGlossary(pack).forEach((row) => {
-        (row.candidates || []).forEach((c) => {
-          if (c && !hubCandidates.includes(c)) hubCandidates.push(c);
+        (row.candidates || []).slice(0, 4).forEach((c) => {
+          if (c && !hubTerms.includes(c)) hubTerms.push(c);
         });
-        if (row.topic && !hubCandidates.includes(row.topic)) {
-          hubCandidates.push(String(row.topic).slice(0, 24));
-        }
       });
     }
-    const themes = Array.isArray(outline?.weekThemes)
-      ? outline.weekThemes.map((w) => String(w.theme || w.title || '').trim()).filter(Boolean)
-      : [];
-    const seeds = [
-      {
-        term: industry,
-        module: '行业',
-        definition: `${industry}领域的基本工作语境与常见业务对象总称。`,
-        judgment: `从${role}视角判断：哪些问题属于本行业、哪些应转交相邻领域。`,
-      },
-      {
-        term: role,
-        module: '面试',
-        definition: `在「${industry}」语境下，${role}的职责边界与核心产出的工作定义。`,
-        judgment: `能一句话说清 ${role} 对谁负责、交付什么、如何衡量好。`,
-      },
-      {
-        term: `${goal}准备`,
-        module: '方法',
-        definition: `围绕「${goal}」目标组织证据、案例与表达结构的系统准备动作。`,
-        judgment: `证据是否对应该岗位真实考核点，而非空泛自我介绍。`,
-      },
-      {
-        term: '边界判断',
-        module: '方法',
-        definition: '在资源与目标冲突时，决定做什么、不做什么、何时升级或降级的判断能力。',
-        judgment: `结合 ${role} 日常：最近一个该拒绝/缩小范围的需求是什么。`,
-      },
-      {
-        term: '验收标准',
-        module: '方法',
-        definition: '某项工作可被他人客观判定「完成」的可检验条件。',
-        judgment: `你写的验收条款 ${role} 同事能否不追问也能执行。`,
-      },
-      {
-        term: '竞品/对照分析',
-        module: '行业',
-        definition: `对照同类方案在 ${industry} 场景中的差异、优劣与可借鉴点。`,
-        judgment: `维度是否贴合 ${role} 决策，而非堆砌参数。`,
-      },
-      {
-        term: '风险清单',
-        module: '方法',
-        definition: '对失败模式、依赖与不可逆成本的结构化列举与应对预案。',
-        judgment: `清单是否能指导下周行动，而不是吓一吓就结束。`,
-      },
-      {
-        term: '关键指标',
-        module: '商业',
-        definition: `衡量「${role}」工作是否创造业务/用户价值的主次指标体系。`,
-        judgment: `优化主指标时，护栏指标会不会被牺牲。`,
-      },
-    ];
-    // 优先用知识库候选词补位
-    hubCandidates.slice(0, 12).forEach((term, i) => {
-      if (seeds.some((s) => s.term === term)) return;
-      seeds.push({
-        term: String(term).slice(0, 24),
-        module: i % 2 === 0 ? '方法' : '行业',
-        definition: `日课中出现的「${term}」：需建立可口述的工作定义与使用边界。`,
-        judgment: `何时该深入「${term}」，何时只需知道边界即可。`,
-      });
-    });
-    themes.slice(0, 6).forEach((theme, i) => {
-      if (seeds.some((s) => s.term === theme)) return;
-      seeds.push({
-        term: theme.slice(0, 24),
-        module: i % 2 === 0 ? '行业' : '技术',
-        definition: `与「${theme}」相关的 ${industry} / ${role} 学习主题：需建立可口述的工作定义与使用边界。`,
-        judgment: `何时该深入「${theme}」，何时只需知道边界即可。`,
-      });
-    });
-    return seeds.map((s) => ({
-      term: s.term,
+    const seeds = hubTerms.slice(0, 6).map((term) => ({
+      term: String(term).slice(0, 24),
       aliases: [],
-      module: s.module,
-      definition: s.definition.slice(0, 120),
+      module: '方法',
+      definition: `在「${industry}」日常工作中，「${term}」指需要单独建立判断标准与使用边界的关键概念，用来对齐协作与验收。`,
+      userPhrases: [`别人张口就提「${term}」，我该怎么判断他们说的是不是一回事？`],
+      example: `面对一个涉及「${term}」的任务：先用一句话说清它解决什么问题，再写 1 条「该用/不该用」规则，最后用一个可观察结果验收。`,
+      visual: {
+        kind: 'flow',
+        title: `怎样正确使用「${term}」`,
+        nodes: [
+          { label: '遇到具体任务', detail: `任务里出现或依赖「${term}」` },
+          { label: '给出工作定义', detail: '一句话说清解决什么问题' },
+          { label: '划清边界', detail: '写清该用与不该用' },
+          { label: '可观察验收', detail: '别人不追问也能判断完成' },
+        ],
+        caption: `示意图绑定「${term}」的使用判断，不是通用学习流程。`,
+      },
+      confusions: [
+        {
+          term: '口头黑话',
+          distinction: `「${term}」应有可共享的工作定义与边界；口头黑话则因人而异、无法验收。`,
+        },
+      ],
       sections: [
-        { label: '是什么', content: s.definition },
-        { label: judgmentLabel, content: s.judgment },
+        { label: '是什么', content: `「${term}」是「${industry}」场景下需要统一口径的概念，用于协作对齐。` },
+        { label: judgmentLabel, content: `能否一句话说清「${term}」解决什么问题，并举出不适用的情况。` },
         {
           label: '面试怎么答',
-          content: `先给工作定义：${s.definition}。再补 1 个「${industry} · ${role}」场景例子。`,
+          content: `先给工作定义，再举「${industry} · ${role}」里一个用对与用错的对比。`,
         },
       ],
     }));
+    return seeds.filter(passesGlossaryQuality);
   }
 
   function ensureGlossary(meta, outline, glossary, pack) {
     let list = Array.isArray(glossary) ? glossary.slice() : [];
-    // 有 hub：优先丢掉与正文完全无关的 stub/空降词
     if (pack?.hub?.chapters) {
       const hub = hubBlobText(pack);
       const planBlob = JSON.stringify(pack.plan || []);
@@ -1943,17 +2130,21 @@ ${JSON.stringify({ glossary: [glossaryFewshot] })}
         );
       });
     }
-    if (list.length >= 12) return list.slice(0, 28);
+    // 只保留过质量门的词条
+    list = list.filter(passesGlossaryQuality);
+    if (list.length >= 8) return list.slice(0, 14);
+    // 不足时尝试从 hub 候选补最小可用集（仍须过门禁）；禁止注入循环 stub
     const stubs = buildRoleStubGlossary(meta, outline, pack);
     const seen = new Set(list.map((g) => String(g.term || '').toLowerCase()));
     for (const s of stubs) {
       const key = String(s.term || '').toLowerCase();
       if (!key || seen.has(key)) continue;
+      if (!passesGlossaryQuality(s)) continue;
       list.push(s);
       seen.add(key);
-      if (list.length >= 18) break;
+      if (list.length >= 8) break;
     }
-    return list.slice(0, 28);
+    return list.slice(0, 14);
   }
 
   function normalizeGlossary(raw, meta = {}) {
@@ -1998,11 +2189,96 @@ ${JSON.stringify({ glossary: [glossaryFewshot] })}
             content: `先给工作定义：${definition}。再补 1 个具体例子说明你理解过。`,
           });
         }
+        const userPhrases = Array.isArray(g.userPhrases)
+          ? g.userPhrases
+              .map((item) => rewriteRoleLensInText(String(item || '').trim(), meta))
+              .filter(Boolean)
+              .slice(0, 3)
+          : [];
+        const example = rewriteRoleLensInText(String(g.example || '').trim(), meta);
+        const confusions = Array.isArray(g.confusions)
+          ? g.confusions
+              .map((item) => ({
+                term: String(item?.term || '').trim(),
+                distinction: rewriteRoleLensInText(String(item?.distinction || '').trim(), meta),
+              }))
+              .filter((item) => item.term && item.distinction && item.term !== term)
+              .slice(0, 3)
+          : [];
+
+        const kindRaw = String(g.visual?.kind || '').trim().toLowerCase();
+        const kind = [
+          'flow',
+          'loop',
+          'anatomy',
+          'roles',
+          'scenario',
+          'compare',
+          'states',
+          'layers',
+          'tree',
+          'timeline',
+          'matrix',
+        ].includes(kindRaw)
+          ? kindRaw
+          : '';
+        let nodes = Array.isArray(g.visual?.nodes)
+          ? g.visual.nodes
+              .map((n) => ({
+                label: rewriteRoleLensInText(String(n?.label || '').trim(), meta),
+                detail: rewriteRoleLensInText(String(n?.detail || '').trim(), meta) || undefined,
+                actor: String(n?.actor || '').trim() || undefined,
+                badge: String(n?.badge || '').trim() || undefined,
+                group: String(n?.group || '').trim() || undefined,
+                parent: String(n?.parent || '').trim() || undefined,
+              }))
+              .filter((n) => n.label)
+              .slice(0, 8)
+          : [];
+        const legacySteps = Array.isArray(g.visual?.steps)
+          ? g.visual.steps
+              .map((item) => rewriteRoleLensInText(String(item || '').trim(), meta))
+              .filter(Boolean)
+              .slice(0, 8)
+          : [];
+        if (!nodes.length && legacySteps.length >= 2) {
+          nodes = legacySteps.map((label) => ({ label }));
+        }
+        const facts = Array.isArray(g.visual?.facts)
+          ? g.visual.facts
+              .map((f) => ({
+                label: String(f?.label || '').trim(),
+                value: String(f?.value || '').trim(),
+              }))
+              .filter((f) => f.label && f.value)
+              .slice(0, 4)
+          : [];
+        const columns = Array.isArray(g.visual?.columns)
+          ? g.visual.columns.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 4)
+          : [];
+        const visual =
+          nodes.length >= 2 || facts.length || g.visual?.quote
+            ? {
+                kind: kind || (facts.length || g.visual?.quote ? 'scenario' : 'flow'),
+                title: String(g.visual?.title || '一眼看懂').trim().slice(0, 40),
+                nodes: nodes.length ? nodes : undefined,
+                steps: legacySteps.length >= 2 ? legacySteps : undefined,
+                caption: rewriteRoleLensInText(String(g.visual?.caption || '').trim(), meta) || undefined,
+                quote: rewriteRoleLensInText(String(g.visual?.quote || '').trim(), meta) || undefined,
+                facts: facts.length ? facts : undefined,
+                columns: columns.length ? columns : undefined,
+              }
+            : null;
+
         return {
           term,
           aliases: Array.isArray(g.aliases) ? g.aliases.map(String).filter(Boolean).slice(0, 4) : [],
+          userPhrases,
           module: String(g.module || '核心').slice(0, 12),
-          definition: definition.slice(0, 120),
+          definition: definition.slice(0, 160),
+          example: example.slice(0, 320),
+          visual,
+          confusions,
           sections: sections.slice(0, 7),
         };
       })
@@ -3011,8 +3287,15 @@ rubric 2-3 条可打分。`;
 
   /**
    * P3：精编每日外链 + 练习题写入 pack
+   * @param {{ dayStart?: number, dayEnd?: number, merge?: boolean }} [rangeOpts]
    */
-  async function attachDayMaterials(pack, onProgress = () => {}, progressBase = 50, progressSpan = 20) {
+  async function attachDayMaterials(
+    pack,
+    onProgress = () => {},
+    progressBase = 50,
+    progressSpan = 20,
+    rangeOpts = {}
+  ) {
     const meta = {
       title: pack.meta?.title,
       industry: pack.meta?.industry,
@@ -3021,9 +3304,12 @@ rubric 2-3 条可打分。`;
       days: pack.meta?.days || pack.plan?.length || 30,
       notes: pack.meta?.notes || '',
     };
-    const plan = pack.plan || [];
-    const dayResources = {};
-    const dayExercises = {};
+    const dayStart = Math.max(1, Number(rangeOpts.dayStart) || 1);
+    const dayEnd = Math.max(dayStart, Number(rangeOpts.dayEnd) || Infinity);
+    const merge = rangeOpts.merge === true;
+    const plan = (pack.plan || []).filter((d) => d.day >= dayStart && d.day <= dayEnd);
+    const dayResources = merge ? { ...(pack.dayResources || {}) } : {};
+    const dayExercises = merge ? { ...(pack.dayExercises || {}) } : {};
     const chunkSize = 7;
     const slices = [];
     for (let i = 0; i < plan.length; i += chunkSize) {
@@ -3031,7 +3317,12 @@ rubric 2-3 条可打分。`;
     }
     const totalChunks = slices.length || 1;
 
-    onProgress(`⑤ 每日资料并行生成（${totalChunks} 周块）…`, progressBase);
+    if (!plan.length) {
+      onProgress('⑤ 本日段无课表可生成资料', progressBase + progressSpan);
+      return pack;
+    }
+
+    onProgress(`⑤ 每日资料并行生成（Day ${dayStart}–${Math.min(dayEnd, plan[plan.length - 1].day)}，${totalChunks} 块）…`, progressBase);
     const chunkRows = await mapPool(
       slices,
       Math.min(2, LLM_CONCURRENCY),
@@ -3067,10 +3358,31 @@ rubric 2-3 条可打分。`;
     return pack;
   }
 
+  function pendingChapterMarkdown(ch) {
+    const title = String(ch?.title || '本章').trim() || '本章';
+    return `# ${title}\n\n> 本章正在后台准备中，先学已就绪的前几天即可；完成后打开知识库会自动更新。\n`;
+  }
+
+  function chapterDayNum(ch, plan) {
+    const fromPlan = dayPlanFromChapter(ch, plan);
+    if (fromPlan?.day) return Number(fromPlan.day);
+    const m = String(ch?.days || '').match(/(\d+)/);
+    return m ? Number(m[1]) : 0;
+  }
+
   /**
    * 生成 hub 章节并写入 pack.hub
+   * @param {{ dayStart?: number, dayEnd?: number, stubOutside?: boolean }} [rangeOpts]
+   *   stubOutside：范围外章节写入「准备中」占位（骨架阶段用）
    */
-  async function attachHub(pack, outline, onProgress = () => {}, progressBase = 70, progressSpan = 28) {
+  async function attachHub(
+    pack,
+    outline,
+    onProgress = () => {},
+    progressBase = 70,
+    progressSpan = 28,
+    rangeOpts = {}
+  ) {
     const meta = {
       title: pack.meta?.title,
       industry: pack.meta?.industry,
@@ -3080,17 +3392,44 @@ rubric 2-3 条可打分。`;
       notes: pack.meta?.notes || '',
     };
     const plan = pack.plan || [];
+    const dayStart = Math.max(1, Number(rangeOpts.dayStart) || 1);
+    const dayEnd = Math.max(dayStart, Number(rangeOpts.dayEnd) || Infinity);
+    const stubOutside = rangeOpts.stubOutside === true;
+    const mergeBodies = rangeOpts.mergeBodies === true;
 
     onProgress('⑥ 按课表生成「一天一章」知识库导航…', progressBase);
     const structure = await generateHubStructure(meta, outline || {}, plan);
     const flat = [];
     structure.modules.forEach((m) => (m.chapters || []).forEach((c) => flat.push(c)));
 
-    const chapters = {};
+    const chapters = mergeBodies && pack.hub?.chapters
+      ? { ...pack.hub.chapters }
+      : {};
+
+    const toWrite = flat.filter((ch) => {
+      const d = chapterDayNum(ch, plan);
+      return d >= dayStart && d <= dayEnd;
+    });
+    const outside = stubOutside
+      ? flat.filter((ch) => {
+          const d = chapterDayNum(ch, plan);
+          return d < dayStart || d > dayEnd;
+        })
+      : [];
+
+    outside.forEach((ch) => {
+      if (!chapters[ch.slug] || /后台准备中/.test(chapters[ch.slug] || '')) {
+        chapters[ch.slug] = pendingChapterMarkdown(ch);
+      }
+    });
+
     /** 日章并行：每章内部仍是设计→深写串行；章与章之间限流并行 */
-    onProgress(`⑦ 日课并行生成（并发 ${LLM_CONCURRENCY}）…`, progressBase + 2);
+    onProgress(
+      `⑦ 日课并行生成（Day ${dayStart}–${dayEnd === Infinity ? '末' : dayEnd}，并发 ${LLM_CONCURRENCY}）…`,
+      progressBase + 2
+    );
     const bodiesList = await mapPool(
-      flat,
+      toWrite,
       LLM_CONCURRENCY,
       async (ch) => {
         const bodies = await generateHubBodies(meta, [ch], plan);
@@ -3122,9 +3461,9 @@ rubric 2-3 条可打分。`;
     pack.updatedAt = new Date().toISOString();
 
     // 定点重写仍带 shallow 标记的章节（最多 5 天，控成本）
-    const shallowSlugs = Object.keys(chapters).filter((slug) =>
-      /<!--\s*zhijing:shallow\s*-->/.test(chapters[slug] || '')
-    );
+    const shallowSlugs = toWrite
+      .map((ch) => ch.slug)
+      .filter((slug) => /<!--\s*zhijing:shallow\s*-->/.test(chapters[slug] || ''));
     if (shallowSlugs.length) {
       const retryList = shallowSlugs.slice(0, 5);
       onProgress(`⑦b 浅文章节定点重写 ${retryList.length} 篇…`, progressBase + progressSpan - 2);
@@ -3240,6 +3579,7 @@ rubric 2-3 条可打分。`;
     const softMin = soft.stemUniqueMin || 0.65;
     const medianMin = soft.chapterMedianMin || 2800;
     const glossHit = glossaryHubHitRate(pack.glossary, pack);
+    const glossStats = glossaryQualityStats(pack.glossary);
 
     pack.meta = pack.meta || {};
     pack.meta.quality = {
@@ -3259,13 +3599,19 @@ rubric 2-3 条可打分。`;
       chapterLenStats: lenStats,
       glossaryHubHitRate: Number(glossHit.toFixed(3)),
       glossaryFromHub: !!pack.meta.glossaryFromHub,
+      glossaryPassCount: glossStats.passCount,
+      glossaryPassRate: Number(glossStats.passRate.toFixed(3)),
+      glossaryKindCount: glossStats.kindCount,
+      glossaryKinds: glossStats.kinds,
       phaseMonotonic: true,
       needsReview:
         shallowChapters.length > Math.ceil((pack.plan?.length || 30) * 0.2) ||
         thinLate.length > 3 ||
         stemUniq < softMin * 0.9 ||
         (bloomIssues.length >= 2 && lenStats.median < medianMin) ||
-        (pack.meta.glossaryFromHub && glossHit < 0.7),
+        (pack.meta.glossaryFromHub && glossHit < 0.7) ||
+        (pack.glossary?.length > 0 && glossStats.passRate < 0.85) ||
+        (pack.glossary?.length >= 4 && glossStats.kindCount < 2),
     };
     if (typeof PackHarness !== 'undefined') {
       PackHarness.setRole('evaluator');
@@ -3478,7 +3824,7 @@ rubric 2-3 条可打分。`;
   /**
    * @param {object} meta { title, industry, role, goal, days, notes }
    * @param {(msg:string, pct:number)=>void} onProgress
-   * @param {{ signal?: AbortSignal }} [opts]
+   * @param {{ signal?: AbortSignal, skeletonDays?: number, onSkeletonReady?: (pack:object)=>void }} [opts]
    */
   async function generate(meta, onProgress = () => {}, opts = {}) {
     beginJob(opts.signal);
@@ -3489,6 +3835,10 @@ rubric 2-3 条可打分。`;
     try {
       throwIfAborted();
       const days = Math.min(90, Math.max(7, Number(meta.days) || 30));
+      const skeletonDays = Math.min(
+        days,
+        Math.max(1, Number(opts.skeletonDays) || 3)
+      );
       const m = { ...meta, days };
       _searchCache.clear();
 
@@ -3502,135 +3852,332 @@ rubric 2-3 条可打分。`;
       if (typeof PackHarness !== 'undefined') PackHarness.span('pipeline.outline');
       const outline = await generateOutline(m);
 
-    // ②∥④：课表 ∥ 能力/面试/作品（术语库延后到知识库之后）
-    if (typeof PackHarness !== 'undefined') PackHarness.setRole('generator');
+      // ── 骨架：先出前几天可学内容 ──
+      if (typeof PackHarness !== 'undefined') PackHarness.setRole('generator');
+      const firstChunkEnd = Math.min(days, Math.max(skeletonDays, Math.min(CHUNK, days)));
+      onProgress(`② 先排前 ${firstChunkEnd} 天课表（骨架）…`, 8);
+      const firstChunk = await generatePlanChunk(m, outline, 1, firstChunkEnd);
+      let plan = injectHubBacklinkTasks(
+        applyPhaseFromOutline(fillMissingDays(firstChunk, days, outline), outline)
+      );
+
+      const pack = ContentPack.emptyPack({
+        ...m,
+        title: outline.title || m.title,
+        id: ContentPack.uid(),
+      });
+      pack.plan = plan;
+      pack.glossary = [];
+      pack.interview = [];
+      pack.skills = [
+        { id: 'industry', label: '行业认知', desc: '' },
+        { id: 'domain', label: '领域方法', desc: '' },
+        { id: 'product', label: '产品/业务能力', desc: '' },
+        { id: 'execution', label: '落地执行', desc: '' },
+        { id: 'portfolio', label: '作品集', desc: '' },
+        { id: 'interview', label: '面试表达', desc: '' },
+      ];
+      pack.portfolio = [];
+      pack.meta = pack.meta || {};
+      pack.meta.outcomes = outline.outcomes || null;
+      pack.meta.generation = {
+        phase: 'skeleton',
+        readyThroughDay: 0,
+        skeletonDays,
+        outlineSnapshot: {
+          title: outline.title,
+          phases: outline.phases,
+          weekThemes: outline.weekThemes,
+          hotKeywords: outline.hotKeywords,
+          outcomes: outline.outcomes,
+        },
+      };
+      pack.hot = {
+        keywords:
+          outline.hotKeywords ||
+          [`${m.industry} ${m.role} 新闻`, `${m.industry} 融资`, `${m.industry} 政策`],
+        systemHint: `面向「${m.industry}」行业「${m.role}」读者策展产业日课。`,
+      };
+      pack.status = 'partial';
+
+      onProgress(`⑤∥⑦ 先备 Day 1–${skeletonDays} 资料与知识库…`, 14);
+      await Promise.all([
+        attachDayMaterials(
+          pack,
+          (msg, pct) => onProgress(msg || '⑤ 骨架资料…', typeof pct === 'number' ? Math.min(28, 14 + (pct - 50) * 0.2) : 18),
+          14,
+          12,
+          { dayStart: 1, dayEnd: skeletonDays, merge: false }
+        ),
+        attachHub(
+          pack,
+          outline,
+          (msg, pct) => onProgress(msg || '⑦ 骨架知识库…', typeof pct === 'number' ? Math.min(32, 14 + (pct - 70) * 0.25) : 22),
+          14,
+          16,
+          { dayStart: 1, dayEnd: skeletonDays, stubOutside: true }
+        ),
+      ]);
+
+      onProgress('③ 先从已就绪章节抽术语…', 33);
+      try {
+        pack.glossary = await generateGlossary(
+          m,
+          outline,
+          (msg) => onProgress(msg || '③ 术语…', 34),
+          pack
+        );
+      } catch (e) {
+        if (isAbortError(e)) throw e;
+        console.warn('[PackGenerator] skeleton glossary failed', e);
+        pack.glossary = ensureGlossary(m, outline, [], pack);
+      }
+      pack.meta.glossaryFromHub = true;
+      pack.meta.glossaryHubHitRate = Number(glossaryHubHitRate(pack.glossary, pack).toFixed(3));
+      pack.meta.generation = {
+        ...pack.meta.generation,
+        phase: 'filling',
+        readyThroughDay: skeletonDays,
+      };
+      pack.status = 'partial';
+      pack.updatedAt = new Date().toISOString();
+      ContentPack.save(pack);
+      onProgress(
+        `前 ${skeletonDays} 天已可学习，其余课表后台补全中…`,
+        36
+      );
+      try {
+        opts.onSkeletonReady?.(pack);
+      } catch (cbErr) {
+        console.warn('[PackGenerator] onSkeletonReady', cbErr);
+      }
+
+      // ── 后台补全 ──
+      return await fillPackRemainder(pack, outline, m, onProgress, {
+        firstChunkEnd,
+        skeletonDays,
+      });
+    } finally {
+      if (typeof PackHarness !== 'undefined') PackHarness.endSession('ok');
+      endJob();
+    }
+  }
+
+  function outlineFromPack(pack) {
+    const snap = pack?.meta?.generation?.outlineSnapshot;
+    if (snap && typeof snap === 'object') {
+      return {
+        title: snap.title || pack.meta?.title,
+        phases: snap.phases || [],
+        weekThemes: snap.weekThemes || [],
+        hotKeywords: snap.hotKeywords || pack.hot?.keywords || [],
+        outcomes: snap.outcomes || pack.meta?.outcomes || null,
+      };
+    }
+    const plan = pack.plan || [];
+    const outline = {
+      title: pack.meta?.title,
+      phases: [],
+      weekThemes: [],
+      hotKeywords: pack.hot?.keywords || [],
+      outcomes: pack.meta?.outcomes || null,
+    };
+    for (let d = 1; d <= (pack.meta?.days || plan.length); d += 7) {
+      const end = Math.min(d + 6, pack.meta?.days || plan.length);
+      const sample = plan.find((p) => p.day === d) || plan[d - 1];
+      outline.weekThemes.push({
+        week: Math.ceil(d / 7),
+        theme: sample?.topic || `第 ${Math.ceil(d / 7)} 周`,
+        dayStart: d,
+        dayEnd: end,
+      });
+    }
+    const phaseNames = [...new Set(plan.map((p) => p.phase).filter(Boolean))];
+    outline.phases = (phaseNames.length ? phaseNames : ['认知', '方法', '实战', '面试']).map(
+      (name) => ({
+        name,
+        weeks: '',
+        focus: name,
+      })
+    );
+    return outline;
+  }
+
+  function mergePlanByDay(basePlan, chunks, days, outline) {
+    const byDay = new Map();
+    (basePlan || []).forEach((d) => {
+      if (d?.day) byDay.set(Number(d.day), d);
+    });
+    (chunks || []).flat().forEach((d) => {
+      if (d?.day) byDay.set(Number(d.day), d);
+    });
+    const merged = [];
+    for (let i = 1; i <= days; i++) {
+      if (byDay.has(i)) merged.push(byDay.get(i));
+    }
+    return injectHubBacklinkTasks(
+      applyPhaseFromOutline(fillMissingDays(merged, days, outline), outline)
+    );
+  }
+
+  /**
+   * 骨架已就绪后的补全：其余课表 + 资料 + 知识库 + 术语 + 质量门禁
+   */
+  async function fillPackRemainder(pack, outline, meta, onProgress = () => {}, ctx = {}) {
+    throwIfAborted();
+    const days = Math.min(90, Math.max(7, Number(meta.days) || pack.meta?.days || 30));
+    const skeletonDays = Math.min(
+      days,
+      Math.max(1, Number(ctx.skeletonDays) || pack.meta?.generation?.skeletonDays || 3)
+    );
+    const firstChunkEnd = Math.min(
+      days,
+      Number(ctx.firstChunkEnd) || Math.max(skeletonDays, Math.min(CHUNK, days))
+    );
+    const m = { ...meta, days };
+    const o = outline || outlineFromPack(pack);
+
     const weekRanges = [];
     const weekCount = Math.ceil(days / CHUNK);
     for (let i = 0; i < weekCount; i++) {
-      weekRanges.push({
-        start: i * CHUNK + 1,
-        end: Math.min(days, (i + 1) * CHUNK),
-      });
+      const start = i * CHUNK + 1;
+      const end = Math.min(days, (i + 1) * CHUNK);
+      if (end <= firstChunkEnd) continue;
+      const rangeStart = Math.max(start, firstChunkEnd + 1);
+      if (rangeStart <= end) weekRanges.push({ start: rangeStart, end });
     }
+
     onProgress(
-      `②∥④ 课表(${weekRanges.length}周块) ∥ 面试作品（并发≤${LLM_CONCURRENCY}）…`,
-      10
+      weekRanges.length
+        ? `②∥④ 补全其余课表(${weekRanges.length}块) ∥ 面试作品…`
+        : '④ 能力/面试/作品…',
+      40
     );
 
-    let planProgress = 10;
+    let planProgress = 40;
     const bump = (msg, pct) => {
       planProgress = Math.max(planProgress, pct);
       onProgress(msg, planProgress);
     };
 
+    const planPromise = weekRanges.length
+      ? mapPool(
+          weekRanges,
+          LLM_CONCURRENCY,
+          ({ start, end }) => generatePlanChunk(m, o, start, end),
+          (done, total) => {
+            bump(
+              `② 课表补全 ${done}/${total}…`,
+              40 + Math.round((done / Math.max(1, total)) * 12)
+            );
+          }
+        )
+      : Promise.resolve([]);
+
     const [planChunks, extras] = await Promise.all([
-      mapPool(
-        weekRanges,
-        LLM_CONCURRENCY,
-        ({ start, end }) => generatePlanChunk(m, outline, start, end),
-        (done, total) => {
-          bump(
-            `② 课表周块 ${done}/${total}…`,
-            10 + Math.round((done / Math.max(1, total)) * 28)
-          );
-        }
-      ),
-      generateExtras(m, outline).then((ex) => {
-        bump('④ 能力/面试/作品完成', 32);
+      planPromise,
+      generateExtras(m, o).then((ex) => {
+        bump('④ 能力/面试/作品完成', 48);
         return ex;
       }),
     ]);
-    const plan = injectHubBacklinkTasks(
-      applyPhaseFromOutline(fillMissingDays(planChunks.flat(), days, outline), outline)
-    );
-    const bloomIssues = diagnoseBloomRegression(plan);
+
+    pack.plan = mergePlanByDay(pack.plan, planChunks, days, o);
+    pack.interview = extras.interview;
+    pack.skills = extras.skills.length ? extras.skills : pack.skills;
+    pack.portfolio = extras.portfolio;
+    pack.meta = pack.meta || {};
+    pack.meta.outcomes = o.outcomes || pack.meta.outcomes || null;
+    pack.hot = {
+      keywords:
+        o.hotKeywords ||
+        pack.hot?.keywords ||
+        [`${m.industry} ${m.role} 新闻`, `${m.industry} 融资`, `${m.industry} 政策`],
+      systemHint:
+        pack.hot?.systemHint ||
+        `面向「${m.industry}」行业「${m.role}」读者策展产业日课。`,
+    };
+    ContentPack.save(pack);
+
+    const bloomIssues = diagnoseBloomRegression(pack.plan);
     if (bloomIssues.length) {
       console.warn('[PackGenerator] bloom regression weeks', bloomIssues);
     }
 
-    const pack = ContentPack.emptyPack({
-      ...m,
-      title: outline.title || m.title,
-      id: ContentPack.uid(),
-    });
-    pack.plan = plan;
-    pack.glossary = []; // ③ 等知识库写完再从正文抽词
-    pack.interview = extras.interview;
-    pack.skills = extras.skills.length ? extras.skills : [
-      { id: 'industry', label: '行业认知', desc: '' },
-      { id: 'domain', label: '领域方法', desc: '' },
-      { id: 'product', label: '产品/业务能力', desc: '' },
-      { id: 'execution', label: '落地执行', desc: '' },
-      { id: 'portfolio', label: '作品集', desc: '' },
-      { id: 'interview', label: '面试表达', desc: '' },
-    ];
-    pack.portfolio = extras.portfolio;
-    pack.meta = pack.meta || {};
-    pack.meta.outcomes = outline.outcomes || null;
-    pack.hot = {
-      keywords: outline.hotKeywords || [`${m.industry} ${m.role} 新闻`, `${m.industry} 融资`, `${m.industry} 政策`],
-      systemHint: `面向「${m.industry}」行业「${m.role}」读者策展产业日课。`,
-    };
-
-    // ⑤∥⑦ 每日资料 ∥ 知识库（主教材，指导性质）
-    onProgress('⑤∥⑦ 每日资料 ∥ 知识库日课 并行…', 42);
-    let matPct = 42;
-    let hubPct = 42;
+    onProgress('⑤∥⑦ 补全其余资料 ∥ 知识库…', 52);
+    let matPct = 52;
+    let hubPct = 52;
+    const restStart = skeletonDays + 1;
     await Promise.all([
-      attachDayMaterials(
-        pack,
-        (msg, pct) => {
-          if (typeof pct === 'number') {
-            matPct = 42 + ((pct - 52) / 16) * 28;
-            matPct = Math.max(42, Math.min(70, matPct));
-          }
-          onProgress(msg || '⑤ 资料…', Math.max(matPct, hubPct));
-        },
-        52,
-        16
-      ).then(() => {
-        matPct = 70;
-      }),
-      attachHub(
-        pack,
-        outline,
-        (msg, pct) => {
-          if (typeof pct === 'number') {
-            hubPct = 42 + ((pct - 70) / 28) * 50;
-            hubPct = Math.max(42, Math.min(92, hubPct));
-          }
-          onProgress(msg || '⑦ 知识库…', Math.max(matPct, hubPct));
-        },
-        70,
-        28
-      ).then(() => {
-        hubPct = 92;
-      }),
+      restStart <= days
+        ? attachDayMaterials(
+            pack,
+            (msg, pct) => {
+              if (typeof pct === 'number') {
+                matPct = 52 + ((pct - 52) / 16) * 20;
+                matPct = Math.max(52, Math.min(72, matPct));
+              }
+              onProgress(msg || '⑤ 资料补全…', Math.max(matPct, hubPct));
+            },
+            52,
+            18,
+            { dayStart: restStart, dayEnd: days, merge: true }
+          ).then(() => {
+            matPct = 72;
+          })
+        : Promise.resolve().then(() => {
+            matPct = 72;
+          }),
+      restStart <= days
+        ? attachHub(
+            pack,
+            o,
+            (msg, pct) => {
+              if (typeof pct === 'number') {
+                hubPct = 52 + ((pct - 70) / 28) * 28;
+                hubPct = Math.max(52, Math.min(88, hubPct));
+              }
+              onProgress(msg || '⑦ 知识库补全…', Math.max(matPct, hubPct));
+            },
+            55,
+            28,
+            { dayStart: restStart, dayEnd: days, stubOutside: false, mergeBodies: true }
+          ).then(() => {
+            hubPct = 88;
+          })
+        : Promise.resolve().then(() => {
+            hubPct = 88;
+          }),
     ]);
 
-    // ③ 术语库：从知识库抽词并精写（补充层）
-    onProgress('③ 从知识库抽取并精写术语库…', 93);
+    onProgress('③ 加厚术语库…', 90);
     try {
       pack.glossary = await generateGlossary(
         m,
-        outline,
-        (msg) => onProgress(msg || '③ 术语…', 94),
+        o,
+        (msg) => onProgress(msg || '③ 术语…', 92),
         pack
       );
     } catch (e) {
       if (isAbortError(e)) throw e;
-      console.warn('[PackGenerator] glossary after hub failed', e);
-      pack.glossary = ensureGlossary(m, outline, [], pack);
+      console.warn('[PackGenerator] glossary after fill failed', e);
+      pack.glossary = ensureGlossary(m, o, pack.glossary || [], pack);
     }
     pack.meta.glossaryFromHub = true;
     pack.meta.glossaryHubHitRate = Number(glossaryHubHitRate(pack.glossary, pack).toFixed(3));
 
-    onProgress('⑧ Evaluator 质量门禁…', 99);
+    onProgress('⑧ Evaluator 质量门禁…', 96);
     if (typeof PackHarness !== 'undefined') PackHarness.setRole('evaluator');
-    runPackQualityGate(pack, outline);
-    await repairPackWithHarness(pack, outline, onProgress);
+    runPackQualityGate(pack, o);
+    await repairPackWithHarness(pack, o, onProgress);
 
     pack.status = 'ready';
+    pack.meta.generation = {
+      ...(pack.meta.generation || {}),
+      phase: 'done',
+      readyThroughDay: days,
+      completedAt: new Date().toISOString(),
+    };
     pack.updatedAt = new Date().toISOString();
     if (typeof PackHarness !== 'undefined') {
       const snap = PackHarness.snapshot();
@@ -3639,8 +4186,8 @@ rubric 2-3 条可打分。`;
     const q = pack.meta?.quality;
     onProgress(
       q?.needsReview
-        ? '内容包已就绪（Harness 建议复查，见 meta.quality / meta.harness）'
-        : '内容包已就绪（Harness：门禁 + 修复环）',
+        ? '课表已全部就绪（建议复查加厚质量）'
+        : '课表已全部就绪',
       100
     );
     if (typeof PackHarness !== 'undefined') {
@@ -3649,6 +4196,45 @@ rubric 2-3 条可打分。`;
     }
     ContentPack.save(pack);
     return pack;
+  }
+
+  /** 对已有 partial 包继续补全 */
+  async function continueFillForPack(packId, onProgress = () => {}, opts = {}) {
+    beginJob(opts.signal);
+    if (typeof PackHarness !== 'undefined') {
+      PackHarness.beginSession({ packId });
+      PackHarness.setRole('generator');
+    }
+    try {
+      const pack = ContentPack.load(packId);
+      if (!pack) throw new Error('找不到课表');
+      throwIfAborted();
+      _searchCache.clear();
+      const outline = outlineFromPack(pack);
+      const m = {
+        title: pack.meta?.title,
+        industry: pack.meta?.industry,
+        role: pack.meta?.role,
+        goal: pack.meta?.goal,
+        days: pack.meta?.days || pack.plan?.length || 30,
+        notes: pack.meta?.notes || '',
+      };
+      const skeletonDays = pack.meta?.generation?.skeletonDays || 3;
+      const firstChunkEnd = Math.max(skeletonDays, Math.min(CHUNK, m.days));
+      pack.meta = pack.meta || {};
+      pack.meta.generation = {
+        ...(pack.meta.generation || {}),
+        phase: 'filling',
+        readyThroughDay: pack.meta.generation?.readyThroughDay || skeletonDays,
+        skeletonDays,
+      };
+      pack.status = 'partial';
+      ContentPack.save(pack);
+      onProgress('继续补全其余课表…', 38);
+      return await fillPackRemainder(pack, outline, m, onProgress, {
+        firstChunkEnd,
+        skeletonDays,
+      });
     } finally {
       if (typeof PackHarness !== 'undefined') PackHarness.endSession('ok');
       endJob();
@@ -3757,6 +4343,7 @@ rubric 2-3 条可打分。`;
 
   return {
     generate,
+    continueFillForPack,
     generateHubForPack,
     generateDayMaterialsForPack,
     parseJsonLoose,

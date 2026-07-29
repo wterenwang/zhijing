@@ -10,7 +10,7 @@ export function glossaryAnchorId(term: string): string {
 }
 
 export function glossaryHref(term: string): string {
-  return `/glossary#${glossaryAnchorId(term)}`
+  return `/glossary/${encodeURIComponent(term)}`
 }
 
 export function scrollToGlossaryHash(hash: string): boolean {
