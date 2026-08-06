@@ -8,6 +8,8 @@ const { URL } = require('url');
 
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions';
 const DEEPSEEK_ANTHROPIC_URL = 'https://api.deepseek.com/anthropic/v1/messages';
+/** DeepSeek-V4-Flash-0731 正式版 API 模型名 */
+const DEEPSEEK_MODEL = 'deepseek-v4-flash';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -52,6 +54,16 @@ async function readJson(req) {
   return JSON.parse(raw);
 }
 
+function requestAbortSignal(req, res) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once('aborted', abort);
+  res.once('close', () => {
+    if (!res.writableEnded) abort();
+  });
+  return controller.signal;
+}
+
 function normalizeResults(items) {
   const out = [];
   const seen = new Set();
@@ -69,7 +81,7 @@ function normalizeResults(items) {
   return out;
 }
 
-async function proxyDeepseek(payload) {
+async function proxyDeepseek(payload, signal) {
   const apiKey = String(payload.apiKey || '').trim();
   if (!apiKey) {
     const err = new Error('缺少 DeepSeek API Key');
@@ -77,11 +89,13 @@ async function proxyDeepseek(payload) {
     throw err;
   }
   const upstream = {
-    model: payload.model || 'deepseek-chat',
+    model: payload.model || DEEPSEEK_MODEL,
     messages: payload.messages || [],
     temperature: payload.temperature ?? 0.5,
     max_tokens: payload.max_tokens ?? 800,
     stream: false,
+    // V4 默认开启思考模式；课包生成/点评需要稳定 JSON 与 temperature，故关闭
+    thinking: payload.thinking || { type: 'disabled' },
   };
   const res = await fetch(DEEPSEEK_URL, {
     method: 'POST',
@@ -90,6 +104,7 @@ async function proxyDeepseek(payload) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(upstream),
+    signal,
   });
   const text = await res.text();
   let data;
@@ -142,7 +157,7 @@ function extractAnthropicWebResults(data) {
   return normalizeResults(items);
 }
 
-async function searchDeepseek(apiKey, query, count) {
+async function searchDeepseek(apiKey, query, count, signal) {
   const res = await fetch(DEEPSEEK_ANTHROPIC_URL, {
     method: 'POST',
     headers: {
@@ -151,8 +166,10 @@ async function searchDeepseek(apiKey, query, count) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'deepseek-chat',
+      model: DEEPSEEK_MODEL,
       max_tokens: 1024,
+      // Anthropic 兼容口：none = 关闭思考，加快联网搜索
+      reasoning: { effort: 'none' },
       messages: [
         {
           role: 'user',
@@ -173,6 +190,7 @@ async function searchDeepseek(apiKey, query, count) {
         },
       ],
     }),
+    signal,
   });
   const text = await res.text();
   let data;
@@ -228,17 +246,20 @@ function createServer(rootDir, port) {
       }
 
       if (req.method === 'POST' && pathname === '/api/deepseek/chat') {
+        const signal = requestAbortSignal(req, res);
         try {
           const payload = await readJson(req);
-          const data = await proxyDeepseek(payload);
+          const data = await proxyDeepseek(payload, signal);
           sendJson(res, 200, data);
         } catch (e) {
+          if (signal.aborted || res.destroyed) return;
           sendJson(res, e.status || 500, e.body || { error: { message: e.message || String(e) } });
         }
         return;
       }
 
       if (req.method === 'POST' && pathname === '/api/search') {
+        const signal = requestAbortSignal(req, res);
         try {
           const payload = await readJson(req);
           const apiKey = String(payload.apiKey || '').trim();
@@ -253,13 +274,14 @@ function createServer(rootDir, port) {
             sendJson(res, 400, { error: { message: '缺少搜索 query' } });
             return;
           }
-          const results = await searchDeepseek(apiKey, query, count);
+          const results = await searchDeepseek(apiKey, query, count, signal);
           sendJson(res, 200, {
             provider: 'deepseek',
             query,
             results,
           });
         } catch (e) {
+          if (signal.aborted || res.destroyed) return;
           sendJson(res, e.status || 500, { error: { message: e.message || String(e) } });
         }
         return;

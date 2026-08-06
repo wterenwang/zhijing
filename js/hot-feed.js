@@ -309,7 +309,7 @@ const HotFeed = (() => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         apiKey,
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-flash',
         messages: [
           {
             role: 'system',

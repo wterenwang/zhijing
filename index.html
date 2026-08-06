@@ -21,7 +21,7 @@
       --text-secondary: #5a6b82;
       --text-muted: #94a3b8;
       --accent-cyan: #0891b2;
-      --accent-purple: #7c3aed;
+      --accent-purple: #0e7490;
       --accent-green: #16a34a;
       --accent-green-dim: rgba(22, 163, 74, 0.1);
       --radius-card: 16px;
@@ -35,6 +35,11 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     html { color-scheme: light; }
+
+    :where(a, button, input, select, textarea):focus-visible {
+      outline: 2px solid rgba(8, 145, 178, 0.55);
+      outline-offset: 2px;
+    }
 
     body {
       font-family: var(--font);
@@ -453,6 +458,27 @@
     .hub-link:hover {
       background: rgba(124, 58, 237, 0.08);
       border-color: rgba(124, 58, 237, 0.25);
+    }
+
+    .day-glossary-action {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .day-glossary-action[hidden] {
+      display: none;
+    }
+
+    .day-glossary-action .btn-secondary {
+      padding: 7px 12px;
+      font-size: 0.78rem;
+    }
+
+    .day-glossary-status {
+      color: var(--text-muted);
+      font-size: 0.76rem;
     }
 
     /* 每日练习 */
@@ -1576,7 +1602,7 @@
     .hub-frame-wrap {
       width: 100%;
       height: calc(100dvh - 88px);
-      min-height: 600px;
+      min-height: 480px;
       border-radius: var(--radius-card);
       overflow: hidden;
       border: 1px solid var(--border-glass);
@@ -1588,6 +1614,13 @@
       width: 100%;
       height: 100%;
       border: none;
+    }
+
+    @media (max-height: 700px) {
+      .hub-frame-wrap {
+        height: calc(100dvh - 72px);
+        min-height: 360px;
+      }
     }
 
     .hub-empty {
@@ -3154,7 +3187,7 @@
           <div class="splash-mascot-bubble" id="splash-mascot-bubble">嗨～准备好上路了吗？</div>
           <div class="splash-ground"></div>
           <div class="splash-mascot-stage">
-            <img class="splash-mascot-img" src="assets/splash-girl.png?v=20260716f" alt="" draggable="false">
+            <img class="splash-mascot-img" src="assets/splash-girl.png?v=20260731e" alt="" draggable="false">
           </div>
         </div>
       </div>
@@ -3169,7 +3202,7 @@
       </button>
       <div class="top-nav-links" id="workspace-nav">
         <button type="button" class="nav-tab active" data-view="sprint">今天</button>
-        <button type="button" class="nav-tab" data-view="hub">知识库</button>
+        <button type="button" class="nav-tab" data-view="hub">日课</button>
         <button type="button" class="nav-tab" data-view="glossary">术语库</button>
         <button type="button" class="nav-tab" data-view="more">更多</button>
         <button type="button" class="nav-guide-btn" data-open-onboarding title="新人使用指南">指南</button>
@@ -3177,7 +3210,7 @@
     </nav>
 
     <p class="local-hint" id="local-hint" hidden>
-      浏览器直接打开时，知识库可能无法显示。用「启动本地服务」打开即可完整体验（地址：<code id="local-url">http://localhost:3000/index.html</code>）。「今天」的打卡不依赖此步骤。
+      浏览器直接打开时，日课可能无法显示。用「启动本地服务」打开即可完整体验（地址：<code id="local-url">http://localhost:3000/index.html</code>）。「今天」的打卡不依赖此步骤。
     </p>
 
     <!-- 项目列表（平台首页） -->
@@ -3259,6 +3292,10 @@
             </div>
             <ul class="resource-list" id="view-resources"></ul>
             <div class="hub-links" id="view-hub-links"></div>
+            <div class="day-glossary-action" id="day-glossary-action" hidden>
+              <button type="button" class="btn-secondary" id="btn-day-glossary">生成本课术语</button>
+              <span class="day-glossary-status" id="day-glossary-status"></span>
+            </div>
           </div>
 
           <!-- 每日练习 -->
@@ -3413,7 +3450,7 @@
       <div class="hot-view-header">
         <div>
           <h2>今日资讯</h2>
-          <p>看看近期行业热点。开启智能功能后，可一键生成解读并连回知识库。</p>
+          <p>看看近期行业热点。开启智能功能后，可一键生成解读并连回日课。</p>
         </div>
         <div class="hot-actions">
           <button type="button" class="btn-primary" id="btn-hot-generate">生成今日热点</button>
@@ -3429,10 +3466,10 @@
 
     <div id="hub-view" class="view-panel">
       <div class="hub-frame-wrap">
-        <iframe id="hub-frame" title="知识库" src="about:blank"></iframe>
+        <iframe id="hub-frame" title="日课" src="about:blank"></iframe>
         <div id="hub-empty" class="hub-empty" hidden>
           <h3>这里还没有阅读内容</h3>
-          <p>当前路径还没有知识库章节。可回到路径列表，点「生成阅读内容」（需先开启智能功能）；或先使用默认的「产品经理 30 天入门」。</p>
+          <p>当前路径还没有日课章节。可回到路径列表，点「生成日课与核心术语」（需先开启智能功能）；或先使用默认的「产品经理 30 天入门」。</p>
         </div>
       </div>
     </div>
@@ -3651,7 +3688,7 @@
         </button>
         <button type="button" class="bottom-nav-btn" data-view="hub">
           <span class="bn-icon" aria-hidden="true">◈</span>
-          知识库
+          日课
         </button>
         <button type="button" class="bottom-nav-btn" data-view="glossary">
           <span class="bn-icon" aria-hidden="true">あ</span>
@@ -3724,13 +3761,25 @@
   </div>
 
   <!-- 重置确认模态框 -->
-  <div class="modal-overlay" id="reset-modal">
+  <div class="modal-overlay" id="reset-modal" role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
     <div class="glass modal-box">
-      <h3>清空当前路径的学习数据？</h3>
+      <h3 id="reset-modal-title">清空当前路径的学习数据？</h3>
       <p>将清除打卡、笔记、复述、练习、资讯归档、复习卡片与求职记录等，且不可恢复。密钥不会被清除。</p>
       <div class="modal-actions">
         <button class="btn-secondary" id="reset-cancel">取消</button>
         <button class="btn-secondary btn-danger" id="reset-confirm">确认清空</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 删除路径确认 -->
+  <div class="modal-overlay" id="delete-project-modal" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
+    <div class="glass modal-box">
+      <h3 id="delete-project-title">删除这条学习路径？</h3>
+      <p id="delete-project-message">路径和全部学习进度将被删除，且不可恢复。</p>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="delete-project-cancel">取消</button>
+        <button class="btn-secondary btn-danger" id="delete-project-confirm">确认删除</button>
       </div>
     </div>
   </div>
@@ -3818,8 +3867,16 @@
   <script src="js/pm30-pack.js"></script>
   <script src="js/pm30-hub.js"></script>
   <script src="js/content-pack.js"></script>
+  <script src="node_modules/xstate/dist/xstate.umd.min.js"></script>
+  <script src="js/pack-workflow-machine.js"></script>
+  <script src="js/pack-workflow-store.js"></script>
+  <script src="js/pack-workflow-gate.js"></script>
+  <script src="js/pack-workflow-session.js"></script>
+  <script src="js/pack-workflow-recovery.js"></script>
   <script src="js/pack-harness.js"></script>
   <script src="js/pack-generator.js"></script>
+  <script src="js/pack-workflow.js"></script>
+  <script src="js/pack-workflow-browser.js"></script>
   <script src="js/day-resources.js"></script>
   <script src="js/day-exercises.js"></script>
   <script src="js/hot-feed.js"></script>
@@ -4251,10 +4308,13 @@
     function renderResources(day) {
       const resEl = document.getElementById('view-resources');
       const hubEl = document.getElementById('view-hub-links');
+      const glossaryAction = document.getElementById('day-glossary-action');
+      const glossaryButton = document.getElementById('btn-day-glossary');
+      const glossaryStatus = document.getElementById('day-glossary-status');
 
       const paintResources = (resources) => {
         if (!resources.length) {
-          resEl.innerHTML = '<li><span style="color:var(--text-muted);font-size:0.85rem">暂无外链，请阅读知识库章节</span></li>';
+          resEl.innerHTML = '<li><span style="color:var(--text-muted);font-size:0.85rem">暂无外链，请阅读本日课章节</span></li>';
         } else {
           resEl.innerHTML = resources.map(r => `
             <li>
@@ -4272,7 +4332,7 @@
           hubEl.innerHTML = '';
           return;
         }
-        hubEl.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);margin-right:4px">知识库：</span>' +
+        hubEl.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);margin-right:4px">日课：</span>' +
           itemsOrSlugs.map((item) => {
             const slug = typeof item === 'string' ? item : item.slug;
             const title = typeof item === 'string'
@@ -4293,10 +4353,28 @@
         } else if (ContentPack.hasHub?.() && !ContentPack.isBuiltin?.()) {
           const first = ContentPack.getHub()?.navigation?.[0]?.items?.[0];
           hubEl.innerHTML = first
-            ? `<a class="hub-link" href="#" data-hub-slug="${escapeHtml(first.slug)}">打开 ${escapeHtml(first.title || '知识库')}</a>`
-            : '<a class="hub-link" href="#" data-hub-open="1">打开专属知识库</a>';
+            ? `<a class="hub-link" href="#" data-hub-slug="${escapeHtml(first.slug)}">打开 ${escapeHtml(first.title || '日课')}</a>`
+            : '<a class="hub-link" href="#" data-hub-open="1">打开专属日课</a>';
         } else {
           hubEl.innerHTML = '';
+        }
+        const activePack = ContentPack.getActive?.();
+        const dayGlossaryCount = (activePack?.glossary || []).filter((entry) =>
+          Array.isArray(entry?.sourceDays) && entry.sourceDays.includes(Number(day))
+        ).length;
+        const canGenerateDayGlossary =
+          !ContentPack.isBuiltin?.() && !!activePack?.id && hubItems.length > 0;
+        if (glossaryAction) glossaryAction.hidden = !canGenerateDayGlossary;
+        if (glossaryButton) {
+          glossaryButton.textContent = dayGlossaryCount
+            ? '补充本课术语'
+            : '生成本课术语';
+          glossaryButton.dataset.day = String(day);
+        }
+        if (glossaryStatus) {
+          glossaryStatus.textContent = dayGlossaryCount
+            ? `本课已收录 ${dayGlossaryCount} 个术语`
+            : '从本篇日课提炼约 4 个术语';
         }
         if (
           !ContentPack.isBuiltin?.() &&
@@ -4310,6 +4388,7 @@
 
       paintResources([]);
       paintHub([]);
+      if (glossaryAction) glossaryAction.hidden = true;
     }
 
     function updatePracticeProgress(day, total) {
@@ -4588,10 +4667,10 @@
       el.hidden = false;
       if (day > readyN) {
         el.classList.add('is-pending-day');
-        el.innerHTML = `第 ${day} 天内容仍在后台准备。<strong>可先学 Day 1–${readyN}</strong>；补全完成后打开知识库会自动更新。`;
+        el.innerHTML = `第 ${day} 天内容仍在后台准备。<strong>可先学 Day 1–${readyN}</strong>；补全完成后打开日课会自动更新。`;
       } else {
         el.classList.remove('is-pending-day');
-        el.innerHTML = `其余天数仍在后台补全中。<strong>Day 1–${readyN} 已可学</strong>，先打卡即可；未就绪章节打开知识库会提示「准备中」。`;
+        el.innerHTML = `其余天数仍在后台补全中。<strong>Day 1–${readyN} 已可学</strong>，先打卡即可；未就绪章节打开日课会提示「准备中」。`;
       }
     }
 
@@ -4794,6 +4873,8 @@
           badge = '<span class="pc-badge" style="color:#dc2626;background:rgba(220,38,38,0.1)">生成失败</span>';
         } else if (p.packStatus === 'cancelled') {
           badge = '<span class="pc-badge" style="color:#64748b;background:rgba(100,116,139,0.12)">已停止</span>';
+        } else if (p.packStatus === 'needs_review') {
+          badge = '<span class="pc-badge" style="color:#b45309;background:rgba(245,158,11,0.14)">内容待完善</span>';
         } else if (p.isDefault || p.id === ProjectPlatform.DEFAULT_ID) {
           badge = '<span class="pc-badge is-demo">展示样例</span>';
         } else if (
@@ -4837,8 +4918,11 @@
           }
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
           const pack = typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
+          if (p.packStatus === 'needs_review' || pack?.meta?.quality?.needsReview) {
+            return `<button type="button" data-hub-project="${p.id}">修复日课与核心术语</button>`;
+          }
           if (pack?.hub?.navigation?.length) return '';
-          return `<button type="button" data-hub-project="${p.id}">生成阅读与术语</button>`;
+          return `<button type="button" data-hub-project="${p.id}">生成日课与核心术语</button>`;
         })();
         const matsBtn = (() => {
           if (
@@ -5186,10 +5270,16 @@
         const { status, fabLabel } = els();
         if (status) status.textContent = '正在停止生成…';
         if (fabLabel) fabLabel.textContent = '停止中';
-        try {
-          abortCtrl.abort();
-        } catch {
-          /* ignore */
+        if (typeof PackWorkflow !== 'undefined' && PackWorkflow.isBusy?.()) {
+          void PackWorkflow.cancel(activeProjectId).catch((error) => {
+            console.error('[PackWorkflow] cancel failed', error);
+          });
+        } else {
+          try {
+            abortCtrl.abort();
+          } catch {
+            /* legacy fallback */
+          }
         }
         return true;
       }
@@ -5226,7 +5316,7 @@
         abortCtrl = null;
         activeProjectId = null;
         openProjectId = null;
-        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title } = els();
+        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title, hint } = els();
         root?.classList.remove('is-busy', 'is-skeleton-ready');
         fab?.classList.add('is-error');
         fab?.classList.remove('is-done');
@@ -5234,6 +5324,7 @@
         if (fabPct) fabPct.textContent = '!';
         if (title) title.textContent = '生成失败';
         if (status) status.textContent = message || '生成失败';
+        if (hint) hint.textContent = '生成已停止。可稍后再点路径上的「重新生成」。';
         appendLog(message || '生成失败');
         actions?.classList.add('is-visible');
         if (openBtn) openBtn.hidden = true;
@@ -5246,7 +5337,7 @@
         abortCtrl = null;
         activeProjectId = null;
         openProjectId = keepOpenProjectId || null;
-        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title, bar } = els();
+        const { root, fab, fabLabel, fabPct, actions, openBtn, status, title, bar, hint } = els();
         root?.classList.remove('is-busy', 'is-skeleton-ready');
         fab?.classList.add('is-error');
         fab?.classList.remove('is-done');
@@ -5254,6 +5345,11 @@
         if (fabPct) fabPct.textContent = keepOpenProjectId ? '…' : '—';
         if (title) title.textContent = keepOpenProjectId ? '已停止补全' : '已停止生成';
         if (status) status.textContent = message || '已按你的操作停止。可点「重新生成」再试。';
+        if (hint) {
+          hint.textContent = keepOpenProjectId
+            ? '前几天仍可学习；需要时点「继续补全」。'
+            : '生成已停止。可点路径上的「重新生成」再试。';
+        }
         if (bar) bar.style.width = keepOpenProjectId ? '36%' : '0%';
         appendLog(message || '已停止生成');
         actions?.classList.add('is-visible');
@@ -5340,6 +5436,42 @@
       }
     }
 
+    /** 把生成链路内部错误转成用户可理解的提示，避免露出开发侧术语。 */
+    function friendlyGenError(err, fallback = '未知错误') {
+      const code = err?.code || '';
+      const raw = String(err?.message || fallback);
+      if (code === 'NO_KEY' || /未配置|API.?Key|密钥/i.test(raw)) {
+        return '请先开启智能功能并填写 DeepSeek 密钥';
+      }
+      if (code === 'NO_PROXY' || /代理|proxy|本地服务/i.test(raw)) {
+        return '本地服务未就绪，请用应用内启动方式打开后再试';
+      }
+      if (
+        code === 'SERVICE_BUSY' ||
+        /too busy|overloaded|high demand|rate.?limit|服务繁忙|拥挤|繁忙|限流/i.test(raw)
+      ) {
+        return 'AI 服务当前繁忙，请稍等片刻后点「重新生成」再试';
+      }
+      if (code === 'GLOSSARY_QUALITY' || /术语库质量未达标|合格术语|可视化类型/i.test(raw)) {
+        return '核心术语尚未达到可用标准，请再点「修复日课与核心术语」重试';
+      }
+      if (
+        code === 'WORKFLOW_BUDGET' ||
+        code === 'TOOL_BUDGET' ||
+        code === 'WALL_CLOCK' ||
+        /预算已耗尽|工具调用已达上限|墙钟时间/i.test(raw)
+      ) {
+        return '本次生成时间或次数已用完，请稍后重试，或点「继续补全」';
+      }
+      if (code === 'TOOL_NOT_ALLOWED' || code === 'CAPABILITY' || /白名单|能力等级/i.test(raw)) {
+        return '当前无法完成这项生成，请稍后重试';
+      }
+      if (/质量门|Harness|Evaluator|Sprint|Contract|门禁|假绿|浅文/i.test(raw)) {
+        return '部分内容还需要再完善，请点「修复日课与核心术语」重试';
+      }
+      return raw || fallback;
+    }
+
     async function runAiPackGeneration(project) {
       if (GenDock.isBusy()) {
         alert('已有任务在生成中，请稍候完成后再试。也可先点「停止生成」。');
@@ -5348,88 +5480,52 @@
       }
       GenDock.start(`准备「${project.title || '学习路径'}」`, project.id);
       try {
-        if (!AiReview.hasApiKey()) {
-          throw Object.assign(new Error('请先开启智能功能（「更多」→「开启智能功能」）'), { code: 'NO_KEY' });
-        }
         const searchReady = typeof HotFeed !== 'undefined' && HotFeed.hasSearchKey?.();
         if (!searchReady) {
           setGenProgress('未启用联网搜索：资料将主要靠模型（建议在「开启智能功能」里填 DeepSeek）…', 3);
         } else {
           setGenProgress('已启用联网搜索，开始生成…', 3);
         }
-        const pack = await PackGenerator.generate(
-          {
-            title: project.title,
-            industry: project.industry,
-            role: project.role,
-            goal: project.goal || '入门',
-            days: project.days || 30,
-            notes: project.notes || '',
+        const pack = await PackWorkflow.start(project, {
+          onProgress: setGenProgress,
+          onSkeletonReady: (skel) => {
+            renderProjectsHome();
+            const n = skel.meta?.generation?.readyThroughDay || 3;
+            GenDock.markSkeletonReady(project.id, n);
           },
-          setGenProgress,
-          {
-            signal: GenDock.getSignal(),
-            skeletonDays: 3,
-            onSkeletonReady: (skel) => {
-              ProjectPlatform.update(project.id, {
-                packId: skel.id,
-                packStatus: 'partial',
-                title: skel.meta?.title || project.title,
-                days: skel.meta?.days || project.days,
-              });
-              renderProjectsHome();
-              const n = skel.meta?.generation?.readyThroughDay || 3;
-              GenDock.markSkeletonReady(project.id, n);
-            },
-          }
-        );
-        ProjectPlatform.update(project.id, {
-          packId: pack.id,
-          packStatus: 'ready',
-          title: pack.meta?.title || project.title,
-          days: pack.meta?.days || project.days,
         });
         renderProjectsHome();
         if (typeof ContentPack !== 'undefined') ContentPack.reloadActive?.();
         if (document.body.classList.contains('mode-workspace')) renderFillHint();
         GenDock.finishOk({
-          message: '课表与知识库已全部就绪。可继续浏览，或点「打开路径」开始学习。',
+          message: !pack.meta?.quality?.finalGatePassed
+            ? '课表已生成，部分日课或核心术语还需完善。请在路径卡片点击「修复日课与核心术语」。'
+            : '课表与日课已全部就绪。可继续浏览，或点「打开路径」开始学习。',
           projectId: project.id,
         });
       } catch (err) {
         console.error(err);
+        renderProjectsHome();
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
-          if (GenDock.hadSkeletonReady()) {
-            const cur = ProjectPlatform.get(project.id);
-            if (cur?.packId) {
-              ProjectPlatform.update(project.id, { packStatus: 'partial' });
-              renderProjectsHome();
-              GenDock.finishCancelled(
-                '已停止补全。前几天仍可学习，需要时点「继续补全」。',
-                { keepOpenProjectId: project.id }
-              );
-              return;
-            }
-          }
-          ProjectPlatform.update(project.id, { packStatus: 'cancelled' });
-          renderProjectsHome();
-          GenDock.finishCancelled('已停止生成。可点路径上的「重新生成」再试。');
-          return;
-        }
-        if (GenDock.hadSkeletonReady()) {
           const cur = ProjectPlatform.get(project.id);
-          if (cur?.packId) {
-            ProjectPlatform.update(project.id, { packStatus: 'partial' });
-            renderProjectsHome();
-            GenDock.finishError(
-              '补全未完成：' + (err.message || '未知错误') + '。前几天仍可学，可点「继续补全」。'
+          if (cur?.packStatus === 'partial' && cur.packId) {
+            GenDock.finishCancelled(
+              '已停止补全。前几天仍可学习，需要时点「继续补全」。',
+              { keepOpenProjectId: project.id }
             );
             return;
           }
+          GenDock.finishCancelled('已停止生成。可点路径上的「重新生成」再试。');
+          return;
         }
-        ProjectPlatform.update(project.id, { packStatus: 'failed' });
-        renderProjectsHome();
-        GenDock.finishError('生成失败：' + (err.message || '未知错误'));
+        const cur = ProjectPlatform.get(project.id);
+        if (cur?.packStatus === 'partial' && cur.packId) {
+          GenDock.finishError(
+            '补全未完成：' + friendlyGenError(err) + '。前几天仍可学，可点「继续补全」。'
+          );
+          return;
+        }
+        GenDock.finishError('生成失败：' + friendlyGenError(err));
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
         }
@@ -5444,46 +5540,37 @@
         GenDock.setExpanded(true);
         return;
       }
-      ProjectPlatform.update(projectId, { packStatus: 'partial' });
-      renderProjectsHome();
       GenDock.start(`补全「${project.title || '学习路径'}」`, project.id);
       GenDock.markSkeletonReady(
         project.id,
         ContentPack.load(project.packId)?.meta?.generation?.readyThroughDay || 3
       );
       try {
-        if (!AiReview.hasApiKey()) {
-          throw Object.assign(new Error('请先开启智能功能'), { code: 'NO_KEY' });
-        }
-        const pack = await PackGenerator.continueFillForPack(project.packId, setGenProgress, {
-          signal: GenDock.getSignal(),
-        });
-        ProjectPlatform.update(project.id, {
-          packId: pack.id,
-          packStatus: 'ready',
-          title: pack.meta?.title || project.title,
-          days: pack.meta?.days || project.days,
+        const pack = await PackWorkflow.resume(project, {
+          onProgress: setGenProgress,
+          onSkeletonReady: () => {
+            renderProjectsHome();
+          },
         });
         renderProjectsHome();
         ContentPack.reloadActive?.();
         if (document.body.classList.contains('mode-workspace')) renderFillHint();
         GenDock.finishOk({
-          message: '其余课表已补全，全部就绪。',
+          message: pack.meta?.quality?.finalGatePassed
+            ? '其余课表已补全，全部就绪。'
+            : '补全已完成，部分日课或核心术语还需完善，可点「修复日课与核心术语」。',
           projectId: project.id,
         });
       } catch (err) {
         console.error(err);
+        renderProjectsHome();
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
-          ProjectPlatform.update(project.id, { packStatus: 'partial' });
-          renderProjectsHome();
           GenDock.finishCancelled('已停止补全。前几天仍可学习。', {
             keepOpenProjectId: project.id,
           });
           return;
         }
-        ProjectPlatform.update(project.id, { packStatus: 'partial' });
-        renderProjectsHome();
-        GenDock.finishError('继续补全失败：' + (err.message || '未知错误'));
+        GenDock.finishError('继续补全失败：' + friendlyGenError(err));
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
         }
@@ -5493,9 +5580,7 @@
     function retryGeneratePack(projectId) {
       const project = ProjectPlatform.get(projectId);
       if (!project) return;
-      ProjectPlatform.update(projectId, { packStatus: 'generating', packId: null });
-      renderProjectsHome();
-      runAiPackGeneration(ProjectPlatform.get(projectId));
+      runAiPackGeneration(project);
     }
 
     async function runHubCompletion(projectId) {
@@ -5506,28 +5591,28 @@
         GenDock.setExpanded(true);
         return;
       }
-      GenDock.start('生成阅读与术语', project.id);
-      setGenProgress('准备生成阅读内容…', 2);
+      GenDock.start('生成日课与核心术语', project.id);
+      setGenProgress('准备生成日课与核心术语…', 2);
       try {
-        if (!AiReview.hasApiKey()) {
-          throw Object.assign(new Error('请先开启智能功能'), { code: 'NO_KEY' });
-        }
-        await PackGenerator.generateHubForPack(project.packId, setGenProgress, {
-          signal: GenDock.getSignal(),
+        const updatedPack = await PackWorkflow.repairHub(project, {
+          onProgress: setGenProgress,
         });
-        ProjectPlatform.update(project.id, { packStatus: 'ready' });
+        const needsReview = !updatedPack?.meta?.quality?.finalGatePassed;
         renderProjectsHome();
         GenDock.finishOk({
-          message: '阅读内容与术语库已更新。进入路径后打开「知识库 / 术语库」查看。',
+          message: needsReview
+            ? '日课与核心术语已更新，仍有部分内容需完善，可再次点击「修复日课与核心术语」。'
+            : '日课与核心术语已更新。进入路径后打开「日课 / 术语库」查看。',
           projectId: project.id,
         });
       } catch (err) {
         console.error(err);
+        renderProjectsHome();
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
-          GenDock.finishCancelled('已停止生成阅读内容。');
+          GenDock.finishCancelled('已停止生成日课与核心术语。');
           return;
         }
-        GenDock.finishError('生成阅读内容失败：' + (err.message || '未知错误'));
+        GenDock.finishError('生成日课与核心术语失败：' + friendlyGenError(err));
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
         }
@@ -5545,29 +5630,131 @@
       GenDock.start('生成每日练习', project.id);
       setGenProgress('准备生成每日练习…', 2);
       try {
-        if (!AiReview.hasApiKey()) {
-          throw Object.assign(new Error('请先开启智能功能'), { code: 'NO_KEY' });
-        }
-        await PackGenerator.generateDayMaterialsForPack(project.packId, setGenProgress, {
-          signal: GenDock.getSignal(),
+        const updatedPack = await PackWorkflow.generateMaterials(project, {
+          onProgress: setGenProgress,
         });
-        ProjectPlatform.update(project.id, { packStatus: 'ready' });
         renderProjectsHome();
         GenDock.finishOk({
-          message: '每日练习已就绪。进入路径后打开任意一天即可看到。',
+          message: updatedPack?.meta?.quality?.finalGatePassed
+            ? '每日练习已就绪。进入路径后打开任意一天即可看到。'
+            : '每日练习已更新，部分日课或核心术语还需完善，可点「修复日课与核心术语」。',
+          projectId: project.id,
+        });
+      } catch (err) {
+        console.error(err);
+        renderProjectsHome();
+        if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
+          GenDock.finishCancelled('已停止生成每日练习。');
+          return;
+        }
+        GenDock.finishError('生成每日练习失败：' + friendlyGenError(err));
+        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
+          AiReview.openSettingsModal?.();
+        }
+      }
+    }
+
+    async function runDayGlossaryGeneration(day) {
+      const project = activeProject;
+      if (!project?.packId || ContentPack.isBuiltin?.()) return;
+      if (!AiReview.hasApiKey()) {
+        document.getElementById('ai-key-modal')?.classList.add('open');
+        return;
+      }
+      if (GenDock.isBusy()) {
+        alert('已有任务在生成中，请稍候完成后再试。也可先点「停止生成」。');
+        GenDock.setExpanded(true);
+        return;
+      }
+      const targetDay = Number(day) || appData.currentViewDay;
+      GenDock.start(`生成 Day ${targetDay} 本课术语`, project.id);
+      setGenProgress(`准备从 Day ${targetDay} 日课提炼术语…`, 5);
+      try {
+        await PackWorkflow.generateDayGlossary(project, targetDay, {
+          onProgress: setGenProgress,
+        });
+        ContentPack.reloadActive?.();
+        renderResources(targetDay);
+        GenDock.finishOk({
+          message: `Day ${targetDay} 术语已加入术语库，可继续补充或前往术语库查看。`,
           projectId: project.id,
         });
       } catch (err) {
         console.error(err);
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
-          GenDock.finishCancelled('已停止生成每日练习。');
+          GenDock.finishCancelled(`已停止生成 Day ${targetDay} 术语。`);
           return;
         }
-        GenDock.finishError('生成每日练习失败：' + (err.message || '未知错误'));
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
-          AiReview.openSettingsModal?.();
-        }
+        const message =
+          err?.code === 'GLOSSARY_QUALITY'
+            ? '本课术语这次未达到可用标准，请再试一次'
+            : friendlyGenError(err);
+        GenDock.finishError('生成本课术语失败：' + message);
+        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') AiReview.openSettingsModal?.();
       }
+    }
+
+    async function runCustomGlossaryGeneration(term, requestSource) {
+      const project = activeProject;
+      const frame = document.getElementById('hub-frame');
+      const respond = (payload) => {
+        try {
+          requestSource?.postMessage?.(
+            { type: 'zhijing:glossary:result', term, ...payload },
+            window.location.origin === 'null' ? '*' : window.location.origin
+          );
+        } catch {}
+      };
+      if (!project?.packId || ContentPack.isBuiltin?.()) {
+        respond({ ok: false, error: '当前展示路径为只读，不能添加术语' });
+        return;
+      }
+      if (!AiReview.hasApiKey()) {
+        document.getElementById('ai-key-modal')?.classList.add('open');
+        respond({ ok: false, error: '请先开启智能功能' });
+        return;
+      }
+      if (GenDock.isBusy()) {
+        GenDock.setExpanded(true);
+        respond({ ok: false, error: '已有生成任务正在运行' });
+        return;
+      }
+      GenDock.start(`添加术语「${term}」`, project.id);
+      setGenProgress(`准备解释「${term}」…`, 5);
+      try {
+        await PackWorkflow.generateCustomGlossary(project, term, {
+          onProgress: setGenProgress,
+        });
+        ContentPack.reloadActive?.();
+        respond({ ok: true });
+        GenDock.finishOk({
+          message: `「${term}」已加入术语库。`,
+          projectId: project.id,
+        });
+        if (frame) switchView('glossary', `/glossary/${encodeURIComponent(term)}`);
+      } catch (err) {
+        console.error(err);
+        const cancelled =
+          err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err);
+        const message =
+          err?.code === 'GLOSSARY_QUALITY'
+            ? '这个术语这次未达到可用标准，请再试一次'
+            : friendlyGenError(err);
+        respond({ ok: false, error: cancelled ? '已停止生成' : message });
+        if (cancelled) {
+          GenDock.finishCancelled(`已停止添加「${term}」。`);
+          return;
+        }
+        GenDock.finishError('添加术语失败：' + message);
+        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') AiReview.openSettingsModal?.();
+      }
+    }
+
+    let pendingDeleteProjectId = null;
+
+    function closeDeleteProjectModal() {
+      pendingDeleteProjectId = null;
+      document.getElementById('delete-project-modal').classList.remove('open');
     }
 
     function deleteProject(projectId) {
@@ -5576,9 +5763,10 @@
       const label = project.isDefault
         ? '默认路径「产品经理 30 天入门」及学习进度将被删除。若列表为空会自动重新放回推荐入门。'
         : `将删除「${project.title}」及全部学习进度，不可恢复。`;
-      if (!confirm(`${label}\n\n确认删除？`)) return;
-      ProjectPlatform.remove(projectId);
-      renderProjectsHome();
+      pendingDeleteProjectId = projectId;
+      document.getElementById('delete-project-message').textContent = label;
+      document.getElementById('delete-project-modal').classList.add('open');
+      document.getElementById('delete-project-cancel').focus();
     }
 
     // ============================================================
@@ -5628,7 +5816,7 @@
         const hash = hubHash || (view === 'glossary' ? '/glossary' : view === 'graph' ? '/graph' : '/');
         const frame = document.getElementById('hub-frame');
         const empty = document.getElementById('hub-empty');
-        const HUB_CACHE_VER = '20260717pm30';
+        const HUB_CACHE_VER = '20260804daily-glossary';
         const bust = Date.now();
         const builtinId = typeof ContentPack !== 'undefined' ? ContentPack.getBuiltinId?.() : null;
         const hasStaticEmbodyHub = builtinId === ContentPack?.BUILTIN_EMBODY;
@@ -5699,6 +5887,27 @@
         setTimeout(() => document.getElementById('create-title')?.focus(), 50);
       };
       document.getElementById('btn-create-project')?.addEventListener('click', openCreateModal);
+      document.getElementById('btn-day-glossary')?.addEventListener('click', (event) => {
+        const day = Number(event.currentTarget?.dataset?.day) || appData.currentViewDay;
+        void runDayGlossaryGeneration(day);
+      });
+      window.addEventListener('message', (event) => {
+        const frame = document.getElementById('hub-frame');
+        if (!frame?.contentWindow || event.source !== frame.contentWindow) return;
+        if (
+          window.location.origin !== 'null' &&
+          event.origin &&
+          event.origin !== window.location.origin
+        ) {
+          return;
+        }
+        const data = event.data;
+        if (!data || data.type !== 'zhijing:glossary:add') return;
+        if (String(data.packId || '') !== String(activeProject?.packId || '')) return;
+        const term = String(data.term || '').trim();
+        if (!term) return;
+        void runCustomGlossaryGeneration(term, event.source);
+      });
       document.getElementById('create-open-ai-settings')?.addEventListener('click', () => {
         document.getElementById('create-project-modal').classList.remove('open');
         AiReview.openSettingsModal?.();
@@ -5825,7 +6034,7 @@
     }
 
     function bindEvents() {
-      // 顶部 Tab：今天 / 知识库 / 术语库 / 更多
+      // 顶部 Tab：今天 / 日课 / 术语库 / 更多
       document.querySelectorAll('.nav-tab').forEach(btn => {
         btn.addEventListener('click', () => {
           const v = btn.dataset.view;
@@ -5870,7 +6079,7 @@
         });
       });
 
-      // 知识库章节内链
+      // 日课章节内链
       document.getElementById('view-hub-links').addEventListener('click', (e) => {
         const openHub = e.target.closest('[data-hub-open]');
         if (openHub) {
@@ -6054,6 +6263,22 @@
         e.target.value = '';
       });
 
+      // 删除路径确认
+      document.getElementById('delete-project-cancel').addEventListener('click', closeDeleteProjectModal);
+      document.getElementById('delete-project-confirm').addEventListener('click', () => {
+        if (!pendingDeleteProjectId) return;
+        const projectId = pendingDeleteProjectId;
+        closeDeleteProjectModal();
+        ProjectPlatform.remove(projectId);
+        renderProjectsHome();
+      });
+      document.getElementById('delete-project-modal').addEventListener('click', (event) => {
+        if (event.target === event.currentTarget) closeDeleteProjectModal();
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && pendingDeleteProjectId) closeDeleteProjectModal();
+      });
+
       // 重置
       document.getElementById('btn-reset').addEventListener('click', () => {
         document.getElementById('reset-modal').classList.add('open');
@@ -6112,6 +6337,25 @@
     // ============================================================
     function init() {
       ProjectPlatform.ensureRegistry();
+      PackWorkflow.configure({
+        generator: PackGenerator,
+        projects: ProjectPlatform,
+        contentPack: ContentPack,
+        harness: PackHarness,
+      });
+      void PackWorkflow.recover()
+        .then(({ recovered, reconciled }) => {
+          if (recovered > 0 || reconciled > 0) {
+            console.info(
+              `[PackWorkflow] 已恢复 ${recovered} 个中断任务，同步 ${reconciled} 个课包状态`
+            );
+            renderProjectsHome();
+          }
+        })
+        .catch((error) => {
+          console.error('[PackWorkflow] 启动恢复失败', error);
+        });
+      navigator.storage?.persist?.().catch(() => false);
       GenDock.bind();
       bindProjectEvents();
       bindEvents();
@@ -6148,7 +6392,7 @@
       sprintToolsApi = SprintTools.init(() => appData, saveData, getTodayDayNum);
       srsReviewApi = SrsReviewUI.init(() => appData, saveData);
 
-      // file:// 下知识库 iframe 可能受限，提示用本地服务
+      // file:// 下日课 iframe 可能受限，提示用本地服务
       if (location.protocol === 'file:') {
         const hint = document.getElementById('local-hint');
         hint.hidden = false;

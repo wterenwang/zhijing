@@ -13,7 +13,7 @@ export const profile = {
   name: '北邮 · 信息与计算科学',
   subtitle: '2027 届 · AI 产品经理方向',
   intro:
-    '从 RAG 问答 0→1 到竞赛级 PRD 交付，把课程里的 RAG、EARS、Agent PRD 方法论用在真实项目里。本页是简历的项目向展开，每个项目都链回知识库理论章节。',
+    '从 RAG 问答 0→1 到竞赛级 PRD 交付，把课程里的 RAG、EARS、Agent PRD 方法论用在真实项目里。本页是简历的项目向展开，每个项目都链回日课理论章节。',
   skills: [
     'RAG / 大模型应用',
     'PRD / 原型 (Figma·Axure·墨刀)',
@@ -104,12 +104,12 @@ export const projects: ProjectCard[] = [
   },
   {
     slug: 'module-4/06-campus',
-    title: '校园 leadership & 本知识库',
+    title: '校园 leadership & 本日课',
     period: '2024 — 2026',
     role: '社长 / 负责人 / 搭建者',
     summary:
-      '李想科创工作室社长（76 人团队）；空地三栖物流负责人；用 Wteren 链搭建本站 PM 知识库。',
-    tags: ['领导力', 'Wteren', '知识库'],
+      '李想科创工作室社长（76 人团队）；空地三栖物流负责人；用 Wteren 链搭建本站 PM 日课。',
+    tags: ['领导力', 'Wteren', '日课'],
     knowledgeLinks: [
       { label: 'Wteren 总览', slug: 'module-2/00-overview' },
       { label: 'dev-builder', slug: 'module-2/05-dev-builder' },

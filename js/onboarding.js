@@ -33,7 +33,7 @@ const OnboardingGuide = (() => {
         <p class="onb-section-label">你能用到的功能</p>
         <ul class="onb-feat-list">
           <li><strong>今天</strong>：当日任务、资料、练习、打卡与复述</li>
-          <li><strong>知识库</strong>：按模块阅读章节，把知识串起来</li>
+          <li><strong>日课</strong>：按模块阅读每天的指导性章节</li>
           <li><strong>术语库</strong>：速查名词 + 闪卡复习，面试前特别好用</li>
           <li><strong>更多</strong>：资讯、练习复习、求职工具；智能功能可选增强</li>
         </ul>
@@ -48,7 +48,7 @@ const OnboardingGuide = (() => {
       id: 'showcase',
       title: '先认识「展示样例」',
       say: '首页这张默认课表只负责演示完整流程，方便你摸清按钮在哪。',
-      body: `<strong>有什么用：</strong>不用先配密钥，就能体验「今天 → 知识库 → 术语」整条闭环。<br>
+      body: `<strong>有什么用：</strong>不用先配密钥，就能体验「今天 → 日课 → 术语」整条闭环。<br>
         <strong>怎么用：</strong>点卡片进入样例课表；学完引导后，请新建自己的路径当真学习。<br>
         <p class="onb-tip">点「下一步」，我带你进样例里的「今天」页。</p>`,
       pose: 'point',
@@ -98,11 +98,11 @@ const OnboardingGuide = (() => {
     },
     {
       id: 'hub',
-      title: '知识库：系统阅读',
-      say: '顶栏点「知识库」，按周/模块读章节。样例里已经塞好了入门文章。',
+      title: '日课：系统学习',
+      say: '顶栏点「日课」，按周/模块读每天的指导性章节。样例里已经准备好了入门文章。',
       body: `<strong>有什么用：</strong>不只碎片任务，还能顺着知识网络把岗位概念学完整。<br>
         <ol class="onb-steps">
-          <li>顶栏切换到「知识库」</li>
+          <li>顶栏切换到「日课」</li>
           <li>左侧/目录选章节，右侧阅读</li>
           <li>读完可回到「今天」对照任务与练习</li>
         </ol>

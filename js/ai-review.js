@@ -96,11 +96,68 @@ const AiReview = {
     return null;
   },
 
+  isBusyUpstream(status, message = '') {
+    const text = String(message || '');
+    return (
+      status === 429 ||
+      status === 503 ||
+      /too busy|overloaded|high demand|rate.?limit|服务繁忙|拥挤|繁忙|限流|稍后重试/i.test(text)
+    );
+  },
+
+  normalizeUpstreamError(status, message) {
+    const raw = typeof message === 'string' ? message : message ? JSON.stringify(message) : '';
+    const proxyHint = AiReview.proxyErrorMessage(status);
+    if (proxyHint) {
+      const err = new Error(proxyHint);
+      err.status = status;
+      err.code = status === 501 || status === 404 ? 'NO_PROXY' : 'UPSTREAM';
+      return err;
+    }
+    if (AiReview.isBusyUpstream(status, raw)) {
+      const err = new Error('AI 服务当前繁忙，请稍等片刻后点「重新生成」再试');
+      err.status = status || 503;
+      err.code = 'SERVICE_BUSY';
+      return err;
+    }
+    const desktop = document.documentElement?.dataset?.zhijingDesktop === '1';
+    const err = new Error(
+      raw ||
+        `服务暂时不可用${status ? ` (HTTP ${status})` : ''}，${
+          desktop ? '请稍后重试或重启「知径」' : '请稍后重试'
+        }`
+    );
+    err.status = status;
+    err.code = 'UPSTREAM';
+    return err;
+  },
+
+  sleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        const err = new Error('已停止生成');
+        err.code = 'ABORTED';
+        err.name = 'AbortError';
+        reject(err);
+        return;
+      }
+      const timer = setTimeout(resolve, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        const err = new Error('已停止生成');
+        err.code = 'ABORTED';
+        err.name = 'AbortError';
+        reject(err);
+      };
+      signal?.addEventListener?.('abort', onAbort, { once: true });
+    });
+  },
+
   /**
    * 底层对话：供点评、内容包生成等复用
    * @param {{ messages: Array, temperature?: number, max_tokens?: number, model?: string, signal?: AbortSignal }} opts
    */
-  async chat({ messages, temperature = 0.5, max_tokens = 1500, model = 'deepseek-chat', signal } = {}) {
+  async chat({ messages, temperature = 0.5, max_tokens = 1500, model = 'deepseek-v4-flash', signal } = {}) {
     const apiKey = this.getApiKey();
     if (!apiKey) {
       const err = new Error('请先开启智能功能');
@@ -127,54 +184,62 @@ const AiReview = {
       throw err;
     }
 
-    let res;
-    try {
-      res = await fetch('/api/deepseek/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey,
-          model,
-          messages,
-          temperature,
-          max_tokens,
-        }),
-        signal,
-      });
-    } catch (e) {
-      if (e?.name === 'AbortError' || signal?.aborted) {
-        const err = new Error('已停止生成');
-        err.code = 'ABORTED';
-        err.name = 'AbortError';
-        throw err;
+    const maxAttempts = 3;
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let res;
+      try {
+        res = await fetch('/api/deepseek/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apiKey,
+            model,
+            messages,
+            temperature,
+            max_tokens,
+          }),
+          signal,
+        });
+      } catch (e) {
+        if (e?.name === 'AbortError' || signal?.aborted) {
+          const err = new Error('已停止生成');
+          err.code = 'ABORTED';
+          err.name = 'AbortError';
+          throw err;
+        }
+        throw e;
       }
-      throw e;
+
+      const rawText = await res.text();
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        lastError = AiReview.normalizeUpstreamError(res.status, rawText);
+        if (attempt < maxAttempts && AiReview.isBusyUpstream(res.status, rawText)) {
+          await AiReview.sleep(1500 * attempt, signal);
+          continue;
+        }
+        throw lastError;
+      }
+
+      if (!res.ok) {
+        const upstreamMsg = data?.error?.message || data?.error || rawText;
+        lastError = AiReview.normalizeUpstreamError(res.status, upstreamMsg);
+        if (attempt < maxAttempts && AiReview.isBusyUpstream(res.status, upstreamMsg)) {
+          await AiReview.sleep(1500 * attempt, signal);
+          continue;
+        }
+        throw lastError;
+      }
+
+      const text = data?.choices?.[0]?.message?.content?.trim();
+      if (!text) throw new Error('AI 未返回有效内容');
+      return text;
     }
 
-    const rawText = await res.text();
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch {
-      const hint = AiReview.proxyErrorMessage(res.status);
-      const desktop = document.documentElement?.dataset?.zhijingDesktop === '1';
-      throw new Error(
-        hint ||
-          `服务暂时不可用 (HTTP ${res.status})，${desktop ? '请重启「知径」后再试' : '请用「启动本地服务」打开后再试'}`
-      );
-    }
-
-    if (!res.ok) {
-      const hint = AiReview.proxyErrorMessage(res.status);
-      const msg = hint || data?.error?.message || data?.error || `请求失败 (${res.status})`;
-      const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-      err.status = res.status;
-      throw err;
-    }
-
-    const text = data?.choices?.[0]?.message?.content?.trim();
-    if (!text) throw new Error('AI 未返回有效内容');
-    return text;
+    throw lastError || new Error('AI 服务暂时不可用，请稍后重试');
   },
 
   async requestReview({ question, rubric, answer, day, ref }) {
@@ -186,7 +251,7 @@ const AiReview = {
       `学习第 ${day} 天练习题`,
       `题目：${question}`,
       rubricText ? `自检要点：\n${rubricText}` : '',
-      ref ? `知识库提示：${ref}` : '',
+      ref ? `日课提示：${ref}` : '',
       answerBlock,
     ].filter(Boolean).join('\n\n');
 

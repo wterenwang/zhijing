@@ -49,6 +49,8 @@ const PackHarness = (() => {
       'chapter_median_ge_2800',
       'bloom_no_regression',
       'late_chapters_thick_enough',
+      'glossary_core_quality_entries_ge_8',
+      'glossary_visual_kinds_ge_2',
     ],
     budgets: {
       maxRepairRounds: 3,
@@ -197,17 +199,17 @@ const PackHarness = (() => {
     const allow = _session.contract.toolAllowlist || [];
     if (allow.length && !allow.includes(toolName)) {
       span('guard.deny', { toolName, reason: 'not_allowlisted' });
-      return { ok: false, code: 'TOOL_NOT_ALLOWED', message: `工具不在白名单：${toolName}` };
+      return { ok: false, code: 'TOOL_NOT_ALLOWED', message: '当前无法完成这项生成，请稍后重试' };
     }
     if (_session.contract.capabilityMax < CAPABILITY.L2 && toolName === 'api.search') {
-      return { ok: false, code: 'CAPABILITY', message: '当前能力等级禁止联网搜索' };
+      return { ok: false, code: 'CAPABILITY', message: '当前无法使用联网搜索，请稍后重试' };
     }
     if (_session.toolCalls >= (_session.contract.budgets.maxToolCallsPerJob || 200)) {
       span('guard.deny', { toolName, reason: 'tool_budget' });
-      return { ok: false, code: 'TOOL_BUDGET', message: '本任务工具调用已达上限' };
+      return { ok: false, code: 'TOOL_BUDGET', message: '本次生成次数已用完，请稍后重试或点「继续补全」' };
     }
     if (Date.now() - _session.startedAt > (_session.contract.budgets.wallClockMs || 2.7e6)) {
-      return { ok: false, code: 'WALL_CLOCK', message: '本任务墙钟时间已耗尽' };
+      return { ok: false, code: 'WALL_CLOCK', message: '本次生成时间已用完，请稍后重试或点「继续补全」' };
     }
     // 反指标：禁止无搜索结果时空 URL 写入（由调用方配合）
     if (toolName === 'contentPack.save' && payload?.inventUrls) {
@@ -348,6 +350,27 @@ const PackHarness = (() => {
         message: `第${w.week}周 Bloom 相对上周倒退（${w.prev}→${w.curr}），后半周须抬到分析/评估/创造`,
       });
     });
+    if (quality.phaseMonotonic === false) {
+      findings.push({
+        type: 'phase_backjump',
+        target: 'plan',
+        message: `学习阶段在 Day ${(quality.phaseBackjumpDays || []).join(', ')} 发生回跳`,
+      });
+    }
+    if (quality.glossaryEnough === false) {
+      findings.push({
+        type: 'glossary_too_few',
+        target: 'glossary',
+        message: `合格核心术语仅 ${quality.glossaryPassCount || 0} 条，低于 8 条硬门槛；须从日课重抽并逐条精写`,
+      });
+    }
+    if ((quality.glossaryKindCount || 0) < 2) {
+      findings.push({
+        type: 'glossary_visual_monotony',
+        target: 'glossary.visual.kind',
+        message: `术语图鉴仅 ${quality.glossaryKindCount || 0} 种可视化，至少需 2 种且按概念结构选型`,
+      });
+    }
     if (_session) {
       _session.findings = findings;
       span('evaluator.findings', { count: findings.length });
@@ -410,6 +433,10 @@ const PackHarness = (() => {
       quality.chapterMedianLen != null &&
       quality.chapterMedianLen < (soft.chapterMedianMin || 2800);
     const bloomBad = (quality.bloomRegressionWeeks || []).length > 0;
+    const glossaryBad =
+      quality.glossaryEnough === false ||
+      (quality.glossaryPassRate ?? 0) < 0.85 ||
+      (quality.glossaryKindCount || 0) < 2;
     return !!(
       shallow > 0 ||
       thinLate > 0 ||
@@ -418,7 +445,9 @@ const PackHarness = (() => {
       quality.needsReview ||
       stemLow ||
       medianThin ||
-      bloomBad
+      bloomBad ||
+      glossaryBad ||
+      quality.phaseMonotonic === false
     );
   }
 

@@ -18,14 +18,14 @@ export function Layout() {
   return (
     <div className="min-h-[100dvh] flex flex-col">
       {!isEmbed && (
-        <header className="sticky top-0 z-10 flex items-center gap-4 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
+        <header className="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur md:flex-nowrap md:gap-4">
           <Link to="/" className="font-bold text-lg text-slate-900 hover:text-cyan-700 shrink-0 max-w-[200px] truncate">
-            {isRuntime ? hubTitle : '知径 · 知识库'}
+            {isRuntime ? hubTitle : '知径 · 日课'}
           </Link>
-          <div className="flex-1 flex justify-center max-w-md mx-auto">
+          <div className="order-3 flex w-full flex-1 justify-center md:order-none md:mx-auto md:max-w-md">
             {!missingHub && <SearchBar />}
           </div>
-          <nav className="flex gap-3 text-sm shrink-0">
+          <nav className="ml-auto flex shrink-0 gap-3 text-sm">
             <a
               href="../index.html"
               target="_parent"
@@ -112,7 +112,7 @@ export function Layout() {
         <main
           className={
             isGraph
-              ? `flex-1 p-2 md:p-4 w-full ${isEmbed ? 'max-w-none' : 'max-w-6xl mx-auto'}`
+              ? 'w-full flex-1 px-4 py-5 md:px-6 md:py-6'
               : isGlossary
                 ? `flex-1 w-full px-5 py-8 sm:px-8 md:py-10 ${isEmbed ? 'max-w-none' : 'max-w-7xl mx-auto'}`
                 : `flex-1 p-6 ${isEmbed ? 'md:p-8' : 'md:p-10'} max-w-4xl`

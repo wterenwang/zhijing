@@ -20,8 +20,11 @@ export function HomePage() {
           本路径课表已就绪，阅读章节还没生成。
         </p>
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-slate-700 space-y-2">
-          <p>请返回路径列表，点卡片上的 <strong>生成阅读内容</strong>（需先开启智能功能）。</p>
-          <p className="text-slate-500">大约 1–2 分钟即可。</p>
+          <p>
+            请返回路径列表，点卡片上的 <strong>生成日课与核心术语</strong>
+            或 <strong>修复日课与核心术语</strong>（需先开启智能功能）。
+          </p>
+          <p className="text-slate-500">通常需要几分钟，请稍候。</p>
         </div>
       </div>
     )
@@ -29,6 +32,13 @@ export function HomePage() {
 
   return (
     <div>
+      <a
+        href="../index.html"
+        target="_parent"
+        className="mb-6 inline-flex items-center text-sm font-medium text-slate-500 transition hover:text-cyan-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/30"
+      >
+        ← 返回今天
+      </a>
       <h1 className="text-3xl font-bold text-slate-900 mb-2">{hubTitle}</h1>
       <p className="text-slate-600 mb-8 leading-relaxed">
         {isRuntime
@@ -37,22 +47,15 @@ export function HomePage() {
       </p>
 
       <section className="mb-10">
-        <a
-          href="../index.html"
-          className="block p-5 rounded-xl border-2 border-cyan-200 bg-gradient-to-br from-cyan-50 to-white hover:border-cyan-400 hover:shadow-md transition-all"
-        >
-          <h3 className="font-semibold text-slate-900 mb-1">返回今天</h3>
-          <p className="text-sm text-slate-500">
-            每日任务、打卡、复述与今日资料
-          </p>
-        </a>
-      </section>
-
-      <section className="mb-10">
-        <h2 className="text-xl font-semibold mb-4">推荐学习路径</h2>
-        <ol className="list-decimal list-inside space-y-2 text-slate-700">
+        <h2 className="text-xl font-semibold mb-4 text-slate-950">推荐学习路径</h2>
+        <ol className="grid gap-2 text-slate-700 sm:grid-cols-2">
           {learningPath.map((step, i) => (
-            <li key={i}>{step}</li>
+            <li key={i} className="flex min-w-0 gap-3 rounded-xl bg-white px-4 py-3">
+              <span className="font-mono text-xs font-semibold text-cyan-700">
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <span className="min-w-0 break-words text-sm">{step}</span>
+            </li>
           ))}
         </ol>
       </section>
@@ -60,7 +63,7 @@ export function HomePage() {
       <section className="mb-10">
         <Link
           to="/graph"
-          className="block p-5 rounded-xl border-2 border-dashed border-slate-300 bg-gradient-to-br from-slate-50 to-cyan-50 hover:border-cyan-400 hover:shadow-md transition-all text-center"
+          className="block rounded-2xl border border-cyan-200 bg-cyan-50/60 p-5 transition hover:border-cyan-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/30"
         >
           <h3 className="font-semibold text-slate-900 mb-1">知识网络导航</h3>
           <p className="text-sm text-slate-500">
@@ -69,20 +72,27 @@ export function HomePage() {
         </Link>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 mb-10">
+      <section className="grid gap-4 md:grid-cols-2 mb-10">
         {navigation.map((mod) => (
-          <Link
+          <section
             key={mod.id}
-            to={mod.items[0] ? `/doc/${mod.items[0].slug}` : '/'}
-            className="block p-5 rounded-xl border border-slate-200 bg-white hover:shadow-md transition-all"
-            style={{ borderTopColor: mod.color, borderTopWidth: 3 }}
+            className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5"
           >
             <h3 className="font-semibold text-slate-900 mb-1">{mod.title}</h3>
-            <p className="text-sm text-slate-500 mb-3">{mod.description}</p>
-            <span className="text-sm" style={{ color: mod.color }}>
-              {mod.items.length} 个章节 →
-            </span>
-          </Link>
+            <p className="mb-4 text-sm leading-relaxed text-slate-500">{mod.description}</p>
+            <div className="space-y-1 border-t border-slate-100 pt-3">
+              {mod.items.map((item) => (
+                <Link
+                  key={item.slug}
+                  to={`/doc/${item.slug}`}
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-lg px-2 py-2 text-sm text-slate-600 transition hover:bg-cyan-50 hover:text-cyan-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/30"
+                >
+                  <span className="min-w-0 break-words">{item.title}</span>
+                  <span className="shrink-0 text-cyan-700">打开 →</span>
+                </Link>
+              ))}
+            </div>
+          </section>
         ))}
       </section>
     </div>

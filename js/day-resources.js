@@ -53,7 +53,7 @@ const DAY_RESOURCES = {
   },
   7: {
     resources: [
-      { title: '知识库：周复盘方法', url: 'hub/index.html#/doc/module-1/07-week-review', type: 'article' },
+      { title: '日课：周复盘方法', url: 'hub/index.html#/doc/module-1/07-week-review', type: 'article' },
     ],
     hub: ['module-1/07-week-review', 'module-1/00-overview'],
   },
@@ -128,7 +128,7 @@ const DAY_RESOURCES = {
   },
   18: {
     resources: [
-      { title: '知识库：竞品分析框架', url: 'hub/index.html#/doc/module-1/05-competitive', type: 'article' },
+      { title: '日课：竞品分析框架', url: 'hub/index.html#/doc/module-1/05-competitive', type: 'article' },
     ],
     hub: ['module-3/04-competitive-report', 'module-1/05-competitive'],
   },
@@ -190,13 +190,13 @@ const DAY_RESOURCES = {
   },
   27: {
     resources: [
-      { title: '知识库：第一阶段复盘', url: 'hub/index.html#/doc/module-4/07-phase-review', type: 'article' },
+      { title: '日课：第一阶段复盘', url: 'hub/index.html#/doc/module-4/07-phase-review', type: 'article' },
     ],
     hub: ['module-4/07-phase-review'],
   },
   28: {
     resources: [
-      { title: '知识库：第一阶段复盘', url: 'hub/index.html#/doc/module-4/07-phase-review', type: 'article' },
+      { title: '日课：第一阶段复盘', url: 'hub/index.html#/doc/module-4/07-phase-review', type: 'article' },
     ],
     hub: ['module-4/07-phase-review'],
   },
@@ -208,8 +208,8 @@ const DAY_RESOURCES = {
   },
   30: {
     resources: [
-      { title: '知识库：项目一总览', url: 'hub/index.html#/doc/module-5/00-overview', type: 'article' },
-      { title: '知识库：项目二总览', url: 'hub/index.html#/doc/module-6/00-overview', type: 'article' },
+      { title: '日课：项目一总览', url: 'hub/index.html#/doc/module-5/00-overview', type: 'article' },
+      { title: '日课：项目二总览', url: 'hub/index.html#/doc/module-6/00-overview', type: 'article' },
     ],
     hub: ['module-5/00-overview', 'module-6/00-overview'],
   },
@@ -231,11 +231,11 @@ for (let d = 31; d <= 55; d++) {
   const resMap = {
     31: [{ title: 'ROS 2 文档', url: 'https://docs.ros.org/', type: 'tool' }],
     34: [{ title: 'Boston Dynamics Spot SDK', url: 'https://dev.bostondynamics.com/', type: 'tool' }, { title: 'ROS 2', url: 'https://docs.ros.org/', type: 'tool' }],
-    46: [{ title: '知识库：PRD 撰写', url: 'hub/index.html#/doc/module-5/03-prd-writing', type: 'article' }],
-    49: [{ title: '知识库：商业模式', url: 'hub/index.html#/doc/module-5/04-business-model', type: 'article' }],
+    46: [{ title: '日课：PRD 撰写', url: 'hub/index.html#/doc/module-5/03-prd-writing', type: 'article' }],
+    49: [{ title: '日课：商业模式', url: 'hub/index.html#/doc/module-5/04-business-model', type: 'article' }],
   };
   DAY_RESOURCES[d] = {
-    resources: resMap[d] || [{ title: '知识库：开发者生态项目', url: 'hub/index.html#/doc/module-5/00-overview', type: 'article' }],
+    resources: resMap[d] || [{ title: '日课：开发者生态项目', url: 'hub/index.html#/doc/module-5/00-overview', type: 'article' }],
     hub: hubMap[d] || ['module-5/00-overview'],
   };
 }
@@ -257,10 +257,10 @@ for (let d = 56; d <= 82; d++) {
     59: [{ title: '京东/淘宝扫地机差评分析', url: 'https://search.jd.com/Search?keyword=扫地机器人', type: 'article' }],
     62: [{ title: 'OpenVLA 家庭场景', url: 'https://openvla.github.io/', type: 'paper' }],
     68: [{ title: 'Google 语音设计指南', url: 'https://designguidelines.withgoogle.com/', type: 'article' }],
-    78: [{ title: '知识库：体验指标', url: 'hub/index.html#/doc/module-6/05-metrics', type: 'article' }],
+    78: [{ title: '日课：体验指标', url: 'hub/index.html#/doc/module-6/05-metrics', type: 'article' }],
   };
   DAY_RESOURCES[d] = {
-    resources: resMap[d] || [{ title: '知识库：家庭场景项目', url: 'hub/index.html#/doc/module-6/00-overview', type: 'article' }],
+    resources: resMap[d] || [{ title: '日课：家庭场景项目', url: 'hub/index.html#/doc/module-6/00-overview', type: 'article' }],
     hub: hubMap[d] || ['module-6/00-overview'],
   };
 }
@@ -273,11 +273,11 @@ for (let d = 83; d <= 90; d++) {
     89: ['module-7/00-overview'], 90: ['module-7/03-apply'],
   };
   const resMap = {
-    86: [{ title: '知识库：模拟面试', url: 'hub/index.html#/doc/module-7/02-interview', type: 'article' }],
+    86: [{ title: '日课：模拟面试', url: 'hub/index.html#/doc/module-7/02-interview', type: 'article' }],
     90: [{ title: 'BOSS直聘', url: 'https://www.zhipin.com/', type: 'tool' }, { title: '实习僧', url: 'https://www.shixiseng.com/', type: 'tool' }],
   };
   DAY_RESOURCES[d] = {
-    resources: resMap[d] || [{ title: '知识库：面试冲刺', url: 'hub/index.html#/doc/module-7/00-overview', type: 'article' }],
+    resources: resMap[d] || [{ title: '日课：面试冲刺', url: 'hub/index.html#/doc/module-7/00-overview', type: 'article' }],
     hub: hubMap[d] || ['module-7/00-overview'],
   };
 }

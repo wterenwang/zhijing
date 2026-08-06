@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { KnowledgeGraph } from '../components/KnowledgeGraph'
 import { useContent } from '../context/ContentContext'
 
@@ -7,50 +7,70 @@ function useEmbedMode() {
   return params.has('embed') || window.self !== window.top
 }
 
+function chipLabel(title: string, index: number) {
+  const clean = title.replace(/（.*?）|\(.*?\)/g, '').trim()
+  if (clean.length <= 10) return clean
+  return `${index + 1}. ${clean.slice(0, 8)}…`
+}
+
 export function GraphPage() {
   const [filter, setFilter] = useState<string | null>(null)
   const isEmbed = useEmbedMode()
   const { navigation, graphNodes, graphLinks, missingHub, hubTitle } = useContent()
 
+  const modules = useMemo(() => {
+    const seen = new Set<string>()
+    return navigation.filter((mod) => {
+      if (!mod.id || seen.has(mod.id)) return false
+      seen.add(mod.id)
+      return true
+    })
+  }, [navigation])
+
   if (missingHub) {
     return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-slate-900 mb-2">知识网络</h1>
-        <p className="text-slate-600">「{hubTitle}」尚未生成专属知识库，请先在项目列表补全知识库。</p>
+      <div className="py-6">
+        <h1 className="mb-2 text-2xl font-semibold text-slate-950">知识网络</h1>
+        <p className="text-slate-600">
+          「{hubTitle}」尚未生成专属日课，请先返回路径列表点「生成日课与核心术语」。
+        </p>
       </div>
     )
   }
 
   return (
-    <div className="w-full max-w-none -mx-6 md:-mx-10 px-4 md:px-6">
-      <div className="mb-4 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">知识网络</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            章节、概念、模块之间的关联。大球=模块，中球=章节，小球=核心概念。
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+    <div className="flex w-full flex-col gap-4">
+      <header className="min-w-0">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-950">知识网络</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          大球模块 · 中球章节 · 小球术语。术语按正文命中挂到章节；粉线为跨模块。
+        </p>
+      </header>
+
+      <div className="flex items-center gap-3">
+        <span className="shrink-0 text-xs font-medium text-slate-400">筛选</span>
+        <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-0.5">
           <button
             type="button"
             onClick={() => setFilter(null)}
-            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+            className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
               filter === null
-                ? 'bg-slate-900 text-white border-slate-900'
-                : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                ? 'border-cyan-700 bg-cyan-700 text-white'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
             }`}
           >
             全部
           </button>
-          {navigation.map((mod) => (
+          {modules.map((mod, index) => (
             <button
               key={mod.id}
               type="button"
+              title={mod.title}
               onClick={() => setFilter(mod.id)}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                 filter === mod.id
-                  ? 'text-white border-transparent'
-                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                  ? 'border-transparent text-white'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
               }`}
               style={
                 filter === mod.id
@@ -58,7 +78,12 @@ export function GraphPage() {
                   : undefined
               }
             >
-              {mod.title}
+              <span
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: mod.color }}
+                aria-hidden="true"
+              />
+              {chipLabel(mod.title, index)}
             </button>
           ))}
         </div>
@@ -66,7 +91,7 @@ export function GraphPage() {
 
       <KnowledgeGraph
         filterModule={filter}
-        height={isEmbed ? 520 : 560}
+        height={isEmbed ? 520 : 600}
         nodes={graphNodes}
         links={graphLinks}
       />

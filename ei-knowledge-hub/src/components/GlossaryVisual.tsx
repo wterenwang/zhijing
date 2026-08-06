@@ -61,9 +61,8 @@ function VisualShell({
       <div className="border-b border-slate-100 bg-white/90 px-5 py-4 sm:px-6">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-xs font-semibold text-cyan-700">{KIND_LABEL[kind]}</span>
-          <span className="text-[11px] font-mono text-slate-400">{kind}</span>
         </div>
-        <h2 className="mt-1 text-lg font-semibold tracking-tight text-slate-950">{title}</h2>
+        <h2 className="mt-1 break-words text-lg font-semibold tracking-tight text-slate-950">{title}</h2>
       </div>
       <div className="p-5 sm:p-6">{children}</div>
       {caption ? (
@@ -89,10 +88,10 @@ function NodeCard({ node, index }: { node: GlossaryVisualNode; index?: number })
             {node.badge}
           </span>
         ) : null}
-        <h3 className="text-sm font-semibold text-slate-950">{node.label}</h3>
+        <h3 className="min-w-0 break-words text-sm font-semibold text-slate-950">{node.label}</h3>
       </div>
       {node.detail ? (
-        <p className="mt-1.5 text-sm leading-relaxed text-slate-600">{node.detail}</p>
+        <p className="mt-1.5 break-words text-sm leading-relaxed text-slate-600">{node.detail}</p>
       ) : null}
     </div>
   )
@@ -149,7 +148,7 @@ export function GlossaryVisualBlock({ entry }: { entry: GlossaryEntry }) {
                 “{visual.quote}”
               </blockquote>
             ) : null}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               {(visual?.facts || []).map((fact, index) => (
                 <div
                   key={`${entry.term}-fact-${index}`}
@@ -196,20 +195,24 @@ export function GlossaryVisualBlock({ entry }: { entry: GlossaryEntry }) {
   if (kind === 'states') {
     return (
       <VisualShell kind={kind} title={title} caption={caption}>
-        <div className="mb-5 flex flex-wrap gap-2">
+        <ol className="mb-5 flex flex-wrap items-center gap-2" aria-label="状态变化顺序">
           {nodes.map((node, index) => (
-            <span
+            <li
               key={`${entry.term}-state-tab-${index}`}
-              className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                index === 0
-                  ? 'border-cyan-300 bg-cyan-50 text-cyan-800'
-                  : 'border-slate-200 bg-white text-slate-500'
-              }`}
+              className="flex min-w-0 items-center gap-2 text-xs text-slate-600"
             >
-              {node.badge || node.label}
-            </span>
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-cyan-50 font-mono font-semibold text-cyan-800">
+                {index + 1}
+              </span>
+              <span className="max-w-40 truncate" title={node.badge || node.label}>
+                {node.badge || node.label}
+              </span>
+              {index < nodes.length - 1 ? (
+                <span className="text-cyan-500" aria-hidden="true">→</span>
+              ) : null}
+            </li>
           ))}
-        </div>
+        </ol>
         <div className="grid gap-3 md:grid-cols-2">
           {nodes.map((node, index) => (
             <div key={`${entry.term}-state-${index}`} className="relative">

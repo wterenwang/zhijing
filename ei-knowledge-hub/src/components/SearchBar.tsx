@@ -8,7 +8,7 @@ function Snippet({ text, query }: { text: string; query: string }) {
     <span className="text-slate-500 text-xs line-clamp-2">
       {parts.map((part, i) =>
         i % 2 === 1 ? (
-          <mark key={i} className="bg-yellow-200 text-slate-800 rounded px-0.5">
+          <mark key={i} className="rounded bg-cyan-100 px-0.5 text-cyan-950">
             {part}
           </mark>
         ) : (
@@ -154,7 +154,7 @@ export function SearchBar() {
                         onClick={() => goTo(result)}
                         onMouseEnter={() => setActiveIndex(i)}
                         className={`w-full text-left px-4 py-2.5 transition-colors ${
-                          i === activeIndex ? 'bg-blue-50' : 'hover:bg-slate-50'
+                          i === activeIndex ? 'bg-cyan-50' : 'hover:bg-slate-50'
                         }`}
                       >
                         <div className="flex items-baseline gap-2 mb-0.5">
@@ -186,7 +186,7 @@ export function SearchBar() {
                 <Link
                   to={`/search?q=${encodeURIComponent(query)}`}
                   onClick={() => setOpen(false)}
-                  className="ml-auto text-blue-600 hover:underline"
+                  className="ml-auto text-cyan-700 hover:underline"
                 >
                   查看全部结果
                 </Link>

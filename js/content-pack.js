@@ -198,6 +198,8 @@ const ContentPack = (() => {
       visual: g.visual && typeof g.visual === 'object' ? g.visual : null,
       confusions: Array.isArray(g.confusions) ? g.confusions : [],
       sections: Array.isArray(g.sections) ? g.sections : [],
+      sourceType: g.sourceType || '',
+      sourceDays: Array.isArray(g.sourceDays) ? g.sourceDays : [],
     }));
   }
 

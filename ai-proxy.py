@@ -11,6 +11,8 @@ PORT = 3000
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_ANTHROPIC_URL = "https://api.deepseek.com/anthropic/v1/messages"
+# DeepSeek-V4-Flash-0731 正式版
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 
 class ProxyHandler(SimpleHTTPRequestHandler):
@@ -79,11 +81,13 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             return
 
         upstream = {
-            "model": payload.get("model", "deepseek-chat"),
+            "model": payload.get("model", DEEPSEEK_MODEL),
             "messages": payload.get("messages", []),
             "temperature": payload.get("temperature", 0.5),
             "max_tokens": payload.get("max_tokens", 800),
             "stream": False,
+            # V4 默认开启思考；生成/点评需要稳定 JSON，关闭思考模式
+            "thinking": payload.get("thinking") or {"type": "disabled"},
         }
 
         req = urllib.request.Request(
@@ -153,8 +157,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     def _search_deepseek(self, api_key, query, count):
         """DeepSeek Anthropic 兼容口的服务端 web_search（同一 DeepSeek Key）。"""
         body = {
-            "model": "deepseek-chat",
+            "model": DEEPSEEK_MODEL,
             "max_tokens": 1024,
+            "reasoning": {"effort": "none"},
             "messages": [
                 {
                     "role": "user",

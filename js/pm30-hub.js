@@ -289,7 +289,7 @@ const Pm30Hub = {
 
   getHub() {
     return {
-      title: '产品经理 30 天入门 · 知识库',
+      title: '产品经理 30 天入门 · 日课',
       learningPath: PM30_HUB_NAV.map((m) => m.title),
       navigation: PM30_HUB_NAV,
       chapters: PM30_HUB_CHAPTERS,

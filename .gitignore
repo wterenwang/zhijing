@@ -33,5 +33,11 @@ PRD.md
 
 # 临时评测 / 本地打包缓存
 _eval_tmp/
+_tmp_pack_audit/
 release-build/
 dist-out/
+assets/_backup_splash/
+
+# 本地开发笔记（不进入公开仓库）
+开发问题与解决记录.md
+生成包全链路审查.md

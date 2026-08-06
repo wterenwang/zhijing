@@ -87,12 +87,17 @@ export function GlossaryDetailPage() {
             {VISUAL_KIND_LABEL[kind]}图解
           </span>
         </div>
-        <div className="mt-5 flex flex-wrap items-baseline gap-x-4 gap-y-2">
-          <h1 className="text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
+        <div className="mt-5 flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-2">
+          <h1 className="max-w-full break-words text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
             {entry.term}
           </h1>
           {entry.aliases?.length ? (
-            <p className="text-lg text-slate-400">{entry.aliases.join(' / ')}</p>
+            <p
+              className="min-w-0 max-w-full truncate text-lg text-slate-400 sm:max-w-2xl"
+              title={entry.aliases.join(' / ')}
+            >
+              {entry.aliases.join(' / ')}
+            </p>
           ) : null}
         </div>
 

@@ -83,7 +83,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
           a: ({ href, children }) => {
             if (href?.startsWith('/')) {
               return (
-                <Link to={href} className="text-blue-600 underline">
+                <Link to={href} className="text-cyan-700 underline">
                   {withTerms(children)}
                 </Link>
               )
@@ -93,7 +93,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 underline"
+                className="text-cyan-700 underline"
               >
                 {withTerms(children)}
               </a>

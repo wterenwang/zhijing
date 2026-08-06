@@ -36,7 +36,7 @@ export function ProjectsPage() {
 
       <h2 className="text-xl font-semibold text-slate-900 mb-4">项目列表</h2>
       <p className="text-sm text-slate-500 mb-6">
-        每个项目卡片可进入详情；「关联知识」直达知识库对应章节，把实践和理论连起来。
+        每个项目卡片可进入详情；「关联知识」直达日课对应章节，把实践和理论连起来。
       </p>
 
       <div className="grid gap-5 md:grid-cols-2">

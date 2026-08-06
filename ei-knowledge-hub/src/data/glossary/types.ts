@@ -70,6 +70,11 @@ export interface GlossaryEntry {
   confusions?: GlossaryConfusion[]
   /** 按词条类型选用不同维度展开说明 */
   sections: GlossarySection[]
+  /** 核心词、按日生成或用户自定义；旧包缺失时按核心词处理 */
+  sourceType?: 'core' | 'day' | 'custom'
+  /** 词条对应的日课 Day */
+  sourceDays?: number[]
+  createdAt?: string
 }
 
 export function glossarySearchText(entry: GlossaryEntry): string {

@@ -141,6 +141,9 @@ function toGlossaryEntries(
     }
     confusions?: Array<{ term?: string; distinction?: string }>
     sections?: Array<{ label?: string; content?: string }>
+    sourceType?: string
+    sourceDays?: number[]
+    createdAt?: string
   }> | undefined,
 ): GlossaryEntry[] {
   if (!Array.isArray(raw)) return []
@@ -179,6 +182,13 @@ function toGlossaryEntries(
       sections: sections.length
         ? sections
         : [{ label: '是什么', content: definition }],
+      sourceType: ['core', 'day', 'custom'].includes(String(g.sourceType || ''))
+        ? (g.sourceType as GlossaryEntry['sourceType'])
+        : undefined,
+      sourceDays: Array.isArray(g.sourceDays)
+        ? g.sourceDays.map(Number).filter((day) => Number.isInteger(day) && day > 0)
+        : undefined,
+      createdAt: String(g.createdAt || '').trim() || undefined,
     })
   }
   return out
@@ -191,7 +201,7 @@ export function loadRuntimePack(packId: string | null): RuntimePackData | null {
     if (!raw) {
       return {
         packId,
-        title: '专属知识库',
+        title: '专属日课',
         learningPath: [],
         navigation: [],
         chapters: {},
@@ -208,14 +218,15 @@ export function loadRuntimePack(packId: string | null): RuntimePackData | null {
     const chapters: Record<string, string> =
       hub?.chapters && typeof hub.chapters === 'object' ? hub.chapters : {}
     const missingHub = !navigation.length || !Object.keys(chapters).length
-    const { nodes, links } = buildGraphFromNavigation(
-      navigation,
-      glossary.map((g) => g.term).slice(0, 12),
-    )
+    const { nodes, links } = buildGraphFromNavigation(navigation, {
+      glossary,
+      chapters,
+      maxConcepts: 10,
+    })
 
     return {
       packId,
-      title: String(hub?.title || pack?.meta?.title || '专属知识库'),
+      title: String(hub?.title || pack?.meta?.title || '专属日课'),
       industry: pack?.meta?.industry,
       role: pack?.meta?.role,
       learningPath: Array.isArray(hub?.learningPath)
@@ -232,7 +243,7 @@ export function loadRuntimePack(packId: string | null): RuntimePackData | null {
     console.warn('[runtime-pack] load failed', e)
     return {
       packId,
-      title: '专属知识库',
+      title: '专属日课',
       learningPath: [],
       navigation: [],
       chapters: {},

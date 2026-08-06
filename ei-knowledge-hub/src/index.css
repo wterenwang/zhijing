@@ -25,6 +25,11 @@ body {
   color: #164e63;
 }
 
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid rgba(8, 145, 178, 0.55);
+  outline-offset: 2px;
+}
+
 .glossary-grid {
   background-color: #ffffff;
   background-image:

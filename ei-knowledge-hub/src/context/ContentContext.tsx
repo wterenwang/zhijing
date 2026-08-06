@@ -46,7 +46,7 @@ function buildApi(runtime: RuntimePackData | null): ContentApi {
       isRuntime: false,
       missingHub: false,
       packId: null,
-      hubTitle: '知径 · 知识库',
+      hubTitle: '知径 · 日课',
       learningPath: [
         '模块一：行业与市场全景',
         '模块二：产品与技术基础',
@@ -79,7 +79,7 @@ function buildApi(runtime: RuntimePackData | null): ContentApi {
       isRuntime: true,
       missingHub: true,
       packId: runtime.packId,
-      hubTitle: runtime.title || '专属知识库',
+      hubTitle: runtime.title || '专属日课',
       industry: runtime.industry,
       role: runtime.role,
       learningPath: [],

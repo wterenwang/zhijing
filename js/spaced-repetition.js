@@ -314,7 +314,14 @@ const SpacedRepetition = {
       if (hit) push(hit, 'day-hint');
     });
 
-    // 2) 术语名出现在当日主题/任务里
+    // 2) 新包优先使用生成时持久化的日课映射
+    glossary.forEach((g) => {
+      if (Array.isArray(g.sourceDays) && g.sourceDays.map(Number).includes(Number(dayNum))) {
+        push(g, 'source-day');
+      }
+    });
+
+    // 3) 兼容旧包：术语名出现在当日主题/任务里
     glossary.forEach((g) => {
       const t = String(g.term || '');
       if (t.length >= 2 && blob.includes(t)) push(g, 'topic-text');

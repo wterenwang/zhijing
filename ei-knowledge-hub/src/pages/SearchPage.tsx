@@ -10,7 +10,7 @@ function Snippet({ text, query }: { text: string; query: string }) {
     <p className="text-sm text-slate-600 mt-1">
       {parts.map((part, i) =>
         i % 2 === 1 ? (
-          <mark key={i} className="bg-yellow-200 text-slate-800 rounded px-0.5">
+          <mark key={i} className="rounded bg-cyan-100 px-0.5 text-cyan-950">
             {part}
           </mark>
         ) : (
@@ -70,7 +70,7 @@ export function SearchPage() {
             <li key={result.id}>
               <Link
                 to={href}
-                className="block p-4 rounded-lg border border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm transition-all"
+                className="block rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:border-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/30"
               >
                 <div className="flex items-baseline gap-2">
                   <span className="font-medium text-slate-900">{result.title}</span>
