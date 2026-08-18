@@ -155,9 +155,36 @@ const AiReview = {
 
   /**
    * 底层对话：供点评、内容包生成等复用
-   * @param {{ messages: Array, temperature?: number, max_tokens?: number, model?: string, signal?: AbortSignal }} opts
+   * @param {{ messages: Array, temperature?: number, max_tokens?: number, model?: string, signal?: AbortSignal, timeoutMs?: number, responseFormat?: object, onMetrics?: Function }} opts
    */
-  async chat({ messages, temperature = 0.5, max_tokens = 1500, model = 'deepseek-v4-flash', signal } = {}) {
+  async chat({
+    messages,
+    temperature = 0.5,
+    max_tokens = 1500,
+    model = 'deepseek-v4-flash',
+    signal,
+    timeoutMs = 3 * 60 * 1000,
+    responseFormat,
+    onMetrics,
+  } = {}) {
+    const startedAt = Date.now();
+    let metricsEmitted = false;
+    const emitMetrics = (metrics = {}) => {
+      if (metricsEmitted || typeof onMetrics !== 'function') return;
+      metricsEmitted = true;
+      try {
+        onMetrics({
+          durationMs: Date.now() - startedAt,
+          attempts: Number(metrics.attempts) || 1,
+          usage: metrics.usage || {},
+          model: metrics.model || model,
+          finishReason: metrics.finishReason || '',
+          status: metrics.status || 'ok',
+        });
+      } catch (error) {
+        console.warn('[AiReview] metrics observer failed', error);
+      }
+    };
     const apiKey = this.getApiKey();
     if (!apiKey) {
       const err = new Error('请先开启智能功能');
@@ -188,6 +215,15 @@ const AiReview = {
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let res;
+      let rawText;
+      const requestController = new AbortController();
+      let timedOut = false;
+      const onCallerAbort = () => requestController.abort();
+      signal?.addEventListener?.('abort', onCallerAbort, { once: true });
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        requestController.abort();
+      }, Math.max(1, Number(timeoutMs) || 3 * 60 * 1000));
       try {
         res = await fetch('/api/deepseek/chat', {
           method: 'POST',
@@ -198,20 +234,31 @@ const AiReview = {
             messages,
             temperature,
             max_tokens,
+            ...(responseFormat ? { responseFormat } : {}),
           }),
-          signal,
+          signal: requestController.signal,
         });
+        rawText = await res.text();
       } catch (e) {
-        if (e?.name === 'AbortError' || signal?.aborted) {
+        if (signal?.aborted) {
           const err = new Error('已停止生成');
           err.code = 'ABORTED';
           err.name = 'AbortError';
           throw err;
         }
+        if (timedOut) {
+          const err = new Error('单次 AI 请求超时，请点「继续补全」重试');
+          err.code = 'UPSTREAM_TIMEOUT';
+          emitMetrics({ attempts: attempt, status: 'timeout' });
+          throw err;
+        }
+        emitMetrics({ attempts: attempt, status: 'network-error' });
         throw e;
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener?.('abort', onCallerAbort);
       }
 
-      const rawText = await res.text();
       let data;
       try {
         data = JSON.parse(rawText);
@@ -221,6 +268,7 @@ const AiReview = {
           await AiReview.sleep(1500 * attempt, signal);
           continue;
         }
+        emitMetrics({ attempts: attempt, status: 'invalid-response' });
         throw lastError;
       }
 
@@ -231,11 +279,21 @@ const AiReview = {
           await AiReview.sleep(1500 * attempt, signal);
           continue;
         }
+        emitMetrics({ attempts: attempt, usage: data?.usage || {}, status: 'upstream-error' });
         throw lastError;
       }
 
       const text = data?.choices?.[0]?.message?.content?.trim();
-      if (!text) throw new Error('AI 未返回有效内容');
+      if (!text) {
+        emitMetrics({ attempts: attempt, usage: data?.usage || {}, status: 'empty-response' });
+        throw new Error('AI 未返回有效内容');
+      }
+      emitMetrics({
+        attempts: attempt,
+        usage: data?.usage || {},
+        model: data?.model || model,
+        finishReason: data?.choices?.[0]?.finish_reason || '',
+      });
       return text;
     }
 

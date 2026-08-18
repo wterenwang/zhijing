@@ -27,9 +27,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run workflow regression tests
+        run: npm run test:workflow
+
       - name: Read version
         id: ver
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -e
+          test "${GITHUB_REF_NAME}" = "v${{ steps.ver.outputs.version }}"
 
       - name: Build DMG / ZIP (unsigned, arm64)
         env:
@@ -50,18 +59,12 @@ jobs:
           retention-days: 14
 
       - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.version }}
-          name: 知径 ${{ steps.ver.outputs.version }}（macOS）
-          body: |
-            ## macOS 安装包（Apple Silicon / arm64）
-
-            1. 下载 `.dmg` 打开，把「知径」拖到 Applications
-            2. 若提示无法验证开发者：右键应用 → 打开 → 仍要打开
-            3. 当前为未签名构建，仅供内测/自用分发
-
-            Windows 安装包请使用仓库 `release/` 本地产物或另行发布。
+          name: 知径 ${{ steps.ver.outputs.version }}
+          body_path: docs/releases/v1.2.0.md
           files: |
             release/*.dmg
             release/*.zip

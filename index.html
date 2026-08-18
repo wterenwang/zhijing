@@ -1599,6 +1599,24 @@
     .view-panel { display: none; }
     .view-panel.active { display: block; }
 
+    .course-glossary-action {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .course-glossary-action[hidden] {
+      display: none;
+    }
+
+    .course-glossary-status {
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+      text-align: right;
+    }
+
     .hub-frame-wrap {
       width: 100%;
       height: calc(100dvh - 88px);
@@ -3127,6 +3145,659 @@
       justify-content: center;
     }
 
+    /* ===== 今日工作台 2026：聚焦、减卡片、保留原有功能 ===== */
+    :root {
+      --bg-deep: #f4f7fa;
+      --bg-elevated: #ffffff;
+      --border-glass: #dfe7ee;
+      --border-glow: rgba(8, 122, 150, 0.42);
+      --text-primary: #17212f;
+      --text-secondary: #536579;
+      --text-muted: #78899b;
+      --accent-cyan: #087a96;
+      --accent-purple: #087a96;
+      --radius-card: 14px;
+      --radius-btn: 9px;
+      --shadow-glass: 0 8px 28px rgba(23, 33, 47, 0.055);
+    }
+
+    .bg-layer {
+      background:
+        radial-gradient(ellipse 70% 38% at 16% -8%, rgba(8, 122, 150, 0.08), transparent),
+        linear-gradient(180deg, #f7f9fb 0%, #f2f6f9 55%, #f4f7fa 100%);
+    }
+
+    .bg-grid {
+      opacity: 0.32;
+      background-size: 64px 64px;
+    }
+
+    .app {
+      max-width: 1180px;
+      padding-top: 18px;
+    }
+
+    .glass {
+      background: var(--bg-surface);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      border-color: var(--border-glass);
+      box-shadow: var(--shadow-glass);
+    }
+
+    .top-nav {
+      position: sticky;
+      top: 10px;
+      z-index: 20;
+      margin-bottom: 24px;
+      padding: 10px 12px;
+      border-color: rgba(207, 218, 228, 0.92);
+      box-shadow: 0 6px 24px rgba(23, 33, 47, 0.07);
+    }
+
+    .top-nav button,
+    .top-nav a {
+      min-height: 36px;
+    }
+
+    .top-nav a.active,
+    .top-nav button.active {
+      background: rgba(8, 122, 150, 0.09);
+    }
+
+    .today-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 28px;
+      margin-bottom: 18px;
+      padding: 6px 4px 0;
+    }
+
+    .today-hero-copy {
+      min-width: 0;
+    }
+
+    .header-brand h1 {
+      max-width: 760px;
+      font-size: clamp(1.35rem, 2.5vw, 1.8rem);
+      line-height: 1.25;
+      color: var(--text-primary);
+      background: none;
+      -webkit-text-fill-color: currentColor;
+    }
+
+    .header-brand p {
+      margin-top: 6px;
+      font-size: 0.9rem;
+    }
+
+    .today-hero .stats-row {
+      gap: 0;
+      flex-wrap: nowrap;
+      border-left: 1px solid var(--border-glass);
+    }
+
+    .today-hero .stat-pill {
+      min-width: 92px;
+      padding: 4px 14px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .today-hero .stat-pill .label {
+      color: var(--text-muted);
+      font-size: 0.68rem;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .today-hero .stat-pill .value {
+      margin-top: 1px;
+      color: var(--text-primary);
+      font-size: 1.05rem;
+      font-family: var(--font);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .progress-wrap {
+      margin-bottom: 22px;
+      padding: 0 4px;
+    }
+
+    .progress-meta {
+      margin-bottom: 7px;
+      font-size: 0.78rem;
+    }
+
+    .progress-bar {
+      height: 4px;
+      background: #dfe8ee;
+    }
+
+    .progress-fill {
+      background: var(--accent-cyan);
+    }
+
+    .main-grid {
+      grid-template-columns: minmax(0, 1fr) 260px;
+      gap: 24px;
+    }
+
+    .day-card {
+      padding: 28px 30px 30px;
+      overflow: clip;
+    }
+
+    .day-nav {
+      margin: -4px 0 24px;
+    }
+
+    .nav-btn {
+      min-height: 38px;
+      background: #f8fafb;
+      border-color: #dce5ec;
+    }
+
+    .day-indicator .day-num {
+      font-family: var(--font);
+      font-size: 1.15rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .phase-tag {
+      padding: 3px 9px;
+      color: var(--accent-cyan);
+      background: rgba(8, 122, 150, 0.075);
+      border-color: rgba(8, 122, 150, 0.16);
+    }
+
+    .day-topic {
+      max-width: 36ch;
+      font-size: clamp(1.35rem, 2.6vw, 1.75rem);
+      line-height: 1.32;
+      letter-spacing: -0.025em;
+    }
+
+    .week-label {
+      margin-bottom: 18px;
+    }
+
+    .today-flow {
+      border-top: 1px solid var(--border-glass);
+    }
+
+    .learning-block {
+      margin: 0;
+      padding: 24px 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .learning-block + .learning-block {
+      border-top: 1px solid var(--border-glass);
+    }
+
+    .learning-block-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+
+    .learning-block-head h3,
+    .resources-title,
+    .practice-title {
+      margin: 0;
+      color: var(--text-primary);
+      font-size: 1rem;
+      font-weight: 650;
+    }
+
+    .learning-block-head span {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      text-align: right;
+    }
+
+    .task-list {
+      counter-reset: today-task;
+      gap: 4px;
+      margin-bottom: 0;
+    }
+
+    .task-list li {
+      counter-increment: today-task;
+      gap: 12px;
+      padding: 10px 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #25364a;
+      font-size: 0.94rem;
+      line-height: 1.6;
+    }
+
+    .task-list li::before {
+      content: counter(today-task);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      margin-top: 1px;
+      color: var(--accent-cyan);
+      background: rgba(8, 122, 150, 0.09);
+      box-shadow: none;
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .resources-title,
+    .practice-title {
+      margin-bottom: 12px;
+    }
+
+    .resources-title svg,
+    .practice-title svg {
+      color: var(--accent-cyan);
+    }
+
+    .resource-list {
+      gap: 0;
+      margin-bottom: 12px;
+    }
+
+    .resource-list li + li {
+      border-top: 1px solid #e8eef3;
+    }
+
+    .resource-list li a {
+      min-height: 46px;
+      padding: 11px 2px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    .resource-list li a:hover {
+      color: var(--accent-cyan);
+      background: rgba(8, 122, 150, 0.04);
+      box-shadow: none;
+    }
+
+    .resource-type,
+    .resource-type.report,
+    .resource-type.video,
+    .resource-type.paper,
+    .resource-type.tool {
+      color: var(--text-secondary);
+      background: #edf2f5;
+    }
+
+    .hub-links {
+      padding-top: 12px;
+      border-top-color: #e8eef3;
+    }
+
+    .hub-link {
+      color: var(--accent-cyan);
+      background: #f7fafb;
+      border-color: #dce5ec;
+    }
+
+    .practice-progress {
+      margin: -5px 0 10px 24px;
+      color: var(--text-muted);
+    }
+
+    .practice-tip {
+      margin-bottom: 12px;
+      padding: 9px 11px;
+      color: var(--text-secondary);
+      background: #f5f8fa;
+      border-color: #e2e9ef;
+    }
+
+    .practice-list {
+      gap: 10px;
+    }
+
+    .practice-item {
+      padding: 13px 14px;
+      border-color: #e0e8ee;
+      border-radius: 11px;
+      background: #fbfcfd;
+    }
+
+    .practice-item.done {
+      background: #f1f8f3;
+      border-color: rgba(22, 131, 69, 0.26);
+    }
+
+    .practice-answer,
+    .practice-rubric,
+    .preview-panel {
+      background: #f6f9fb;
+      border-color: #dfe7ee;
+    }
+
+    .checkin-area {
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 0;
+      padding: 18px;
+      border: 1px solid rgba(8, 122, 150, 0.18);
+      border-radius: 12px;
+      background: #f0f8fa;
+    }
+
+    .checkin-hint {
+      order: -1;
+      flex: 1;
+      color: #4e6473;
+      font-size: 0.84rem;
+    }
+
+    .btn-checkin {
+      min-width: 142px;
+      min-height: 42px;
+      padding: 11px 20px;
+      background: var(--accent-cyan);
+      box-shadow: 0 6px 16px rgba(8, 122, 150, 0.18);
+    }
+
+    .btn-checkin:hover {
+      filter: none;
+      transform: translateY(-1px);
+      box-shadow: 0 9px 22px rgba(8, 122, 150, 0.22);
+    }
+
+    .reflection-workspace {
+      margin-top: 20px;
+      padding: 24px 26px 26px;
+    }
+
+    .reflection-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border-glass);
+    }
+
+    .reflection-header h3 {
+      font-size: 1.02rem;
+      font-weight: 650;
+    }
+
+    .reflection-header p {
+      margin-top: 2px;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    .reflection-tabs {
+      display: inline-flex;
+      gap: 4px;
+      padding: 3px;
+      border-radius: 9px;
+      background: #edf2f5;
+    }
+
+    .reflection-tab {
+      min-width: 64px;
+      padding: 7px 12px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: var(--font);
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .reflection-tab.active {
+      color: var(--text-primary);
+      background: #ffffff;
+      box-shadow: 0 1px 4px rgba(23, 33, 47, 0.1);
+      font-weight: 600;
+    }
+
+    .reflection-panel {
+      padding-top: 20px;
+    }
+
+    .reflection-panel[hidden] {
+      display: none !important;
+    }
+
+    .reflection-panel .section-title {
+      margin-bottom: 12px;
+      color: var(--text-secondary);
+      font-size: 0.88rem;
+    }
+
+    .reflection-panel .section-title .icon {
+      width: 18px;
+      height: 18px;
+      color: var(--accent-cyan);
+    }
+
+    .reflection-panel textarea {
+      min-height: 138px;
+      background: #fbfcfd;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 84px;
+      gap: 14px;
+    }
+
+    .stats-panel,
+    .calendar-panel {
+      padding: 18px;
+    }
+
+    .stats-panel h3 {
+      color: var(--text-secondary);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .stats-grid {
+      gap: 0;
+    }
+
+    .stats-item {
+      padding: 10px 6px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .stats-item + .stats-item {
+      border-left: 1px solid var(--border-glass);
+    }
+
+    .stats-item[style] {
+      margin-top: 8px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border-glass);
+      border-left: 0;
+    }
+
+    .stats-item .num {
+      color: var(--text-primary);
+      font-family: var(--font);
+      font-size: 1.25rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .cal-cell.today {
+      background: rgba(8, 122, 150, 0.07);
+    }
+
+    .cal-cell.selected {
+      color: #ffffff;
+      background: var(--accent-cyan);
+    }
+
+    .footer-actions {
+      margin-top: 18px;
+      padding: 0;
+    }
+
+    .footer-settings {
+      border: 1px solid var(--border-glass);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.72);
+    }
+
+    .footer-settings summary {
+      padding: 13px 16px;
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      list-style-position: inside;
+    }
+
+    .footer-settings-body {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px 16px;
+      border-top: 1px solid var(--border-glass);
+    }
+
+    .footer-settings-body .group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    @media (max-width: 860px) {
+      .main-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .sidebar {
+        position: static;
+        display: grid;
+        grid-template-columns: minmax(0, 0.85fr) minmax(280px, 1.15fr);
+      }
+    }
+
+    @media (max-width: 640px) {
+      .app {
+        padding: 12px 12px calc(84px + env(safe-area-inset-bottom));
+      }
+
+      .top-nav {
+        top: 6px;
+        margin-bottom: 18px;
+      }
+
+      .today-hero {
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+
+      .today-hero .stats-row {
+        width: 100%;
+        border-left: 0;
+        border-top: 1px solid var(--border-glass);
+        padding-top: 10px;
+      }
+
+      .today-hero .stat-pill {
+        flex: 1;
+        padding: 2px 8px;
+      }
+
+      .day-card {
+        padding: 20px 18px 22px;
+      }
+
+      .day-nav {
+        margin-bottom: 20px;
+      }
+
+      .nav-btn {
+        padding: 7px 10px;
+        font-size: 0.78rem;
+      }
+
+      .learning-block {
+        padding: 20px 0;
+      }
+
+      .learning-block-head {
+        display: block;
+      }
+
+      .learning-block-head span {
+        display: block;
+        margin-top: 3px;
+        text-align: left;
+      }
+
+      .resource-list li a {
+        align-items: flex-start;
+      }
+
+      .checkin-area {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .checkin-hint {
+        order: 0;
+      }
+
+      .btn-checkin {
+        width: 100%;
+      }
+
+      .reflection-workspace {
+        padding: 20px 18px;
+      }
+
+      .reflection-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .reflection-tabs {
+        width: 100%;
+      }
+
+      .reflection-tab {
+        flex: 1;
+      }
+
+      .sidebar {
+        grid-template-columns: 1fr;
+      }
+
+      .footer-settings-body {
+        align-items: stretch;
+        flex-direction: column;
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
         animation-duration: 0.01ms !important;
@@ -3232,8 +3903,8 @@
     </div>
 
     <div id="sprint-view" class="view-panel">
-    <header class="header">
-      <div class="header-brand">
+    <header class="header today-hero">
+      <div class="header-brand today-hero-copy">
         <h1 id="project-title">产品经理 30 天入门</h1>
         <p id="project-subtitle">按天学习 · 打卡进度 · 用自己的话复述</p>
       </div>
@@ -3282,10 +3953,17 @@
           <h2 class="day-topic" id="view-topic"></h2>
           <p class="week-label" id="view-week"></p>
 
-          <ul class="task-list" id="view-tasks"></ul>
+          <div class="today-flow" id="today-flow">
+          <section class="learning-block task-block" aria-labelledby="today-task-title">
+            <div class="learning-block-head">
+              <h3 id="today-task-title">任务清单</h3>
+              <span>按顺序完成，保持今天的学习节奏</span>
+            </div>
+            <ul class="task-list" id="view-tasks"></ul>
+          </section>
 
           <!-- 今日推荐资料 -->
-          <div class="resources-section" id="resources-section">
+          <div class="resources-section learning-block" id="resources-section">
             <div class="resources-title">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
               今日推荐资料
@@ -3299,7 +3977,7 @@
           </div>
 
           <!-- 每日练习 -->
-          <div class="practice-section" id="practice-section">
+          <div class="practice-section learning-block" id="practice-section">
             <div class="practice-title">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
               每日练习
@@ -3314,13 +3992,26 @@
             <span class="checkin-hint" id="checkin-hint">完成今日任务后点击打卡</span>
           </div>
           <div class="srs-sprint-hint" id="srs-sprint-hint" hidden></div>
+          </div>
         </article>
 
         <!-- 周复盘（Day 7/14/27/28/30） -->
         <section id="weekly-review-section" class="glass section-block" hidden></section>
 
+        <section class="glass reflection-workspace" id="reflection-workspace">
+          <div class="reflection-header">
+            <div>
+              <h3>学习复盘</h3>
+              <p>用自己的话整理，记得会更牢。</p>
+            </div>
+            <div class="reflection-tabs" role="tablist" aria-label="学习复盘方式">
+              <button type="button" class="reflection-tab active" role="tab" aria-selected="true" aria-controls="feynman-section" data-reflection-tab="feynman">复述</button>
+              <button type="button" class="reflection-tab" role="tab" aria-selected="false" aria-controls="notes-section" data-reflection-tab="notes">笔记</button>
+            </div>
+          </div>
+          <div class="reflection-panels">
         <!-- 费曼复述 -->
-        <section class="glass section-block" id="feynman-section">
+        <section class="reflection-panel active" id="feynman-section" role="tabpanel" data-reflection-panel="feynman">
           <h3 class="section-title">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
             今日复述（用自己的话讲一遍）
@@ -3332,7 +4023,7 @@
         </section>
 
         <!-- 学习笔记 -->
-        <section class="glass section-block" id="notes-section">
+        <section class="reflection-panel" id="notes-section" role="tabpanel" data-reflection-panel="notes" hidden>
           <h3 class="section-title">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
             今日笔记
@@ -3347,11 +4038,13 @@
             </div>
           </div>
         </section>
+          </div>
+        </section>
       </div>
 
       <!-- 右侧边栏 -->
       <aside class="sidebar">
-        <div class="glass stats-panel">
+        <div class="glass stats-panel" id="stats-panel">
           <h3>打卡统计</h3>
           <div class="stats-grid">
             <div class="stats-item">
@@ -3369,7 +4062,7 @@
           </div>
         </div>
 
-        <div class="glass calendar-panel">
+        <div class="glass calendar-panel" id="calendar-panel">
           <div class="calendar-header">
             <button class="cal-nav-btn" id="cal-prev" aria-label="上个月">‹</button>
             <h3 id="cal-month-label">2026年7月</h3>
@@ -3389,7 +4082,10 @@
     </div>
 
     <!-- 底部操作 -->
-    <footer class="glass footer-actions">
+    <footer class="footer-actions">
+      <details class="footer-settings">
+        <summary>学习设置与数据</summary>
+        <div class="footer-settings-body">
       <div class="start-date-row">
         <label for="start-date">学习起始日：</label>
         <input type="date" id="start-date">
@@ -3401,6 +4097,8 @@
         <input type="file" id="import-file" accept=".json">
         <button class="btn-secondary btn-danger" id="btn-reset">清空本路径数据</button>
       </div>
+        </div>
+      </details>
     </footer>
     </div><!-- /sprint-view -->
 
@@ -3465,6 +4163,10 @@
     </div>
 
     <div id="hub-view" class="view-panel">
+      <div id="course-glossary-action" class="course-glossary-action" hidden>
+        <span id="course-glossary-status" class="course-glossary-status" role="status"></span>
+        <button type="button" class="btn-secondary" id="btn-course-glossary">从日课补充术语库</button>
+      </div>
       <div class="hub-frame-wrap">
         <iframe id="hub-frame" title="日课" src="about:blank"></iframe>
         <div id="hub-empty" class="hub-empty" hidden>
@@ -3715,7 +4417,7 @@
         <div id="onboarding-body" class="onb-coach-body"></div>
         <div class="onb-footer">
           <div class="onb-progress">
-            <span id="onboarding-step">1 / 7</span>
+            <span id="onboarding-step">1 / 9</span>
             <div id="onboarding-dots" aria-hidden="true"></div>
           </div>
           <div class="onb-actions">
@@ -3866,6 +4568,8 @@
   <script src="js/projects.js"></script>
   <script src="js/pm30-pack.js"></script>
   <script src="js/pm30-hub.js"></script>
+  <script src="js/pack-quality-contract.js"></script>
+  <script src="js/task-resource-binder.js"></script>
   <script src="js/content-pack.js"></script>
   <script src="node_modules/xstate/dist/xstate.umd.min.js"></script>
   <script src="js/pack-workflow-machine.js"></script>
@@ -4320,7 +5024,7 @@
             <li>
               <a href="${escapeHtml(r.url)}" target="_blank" rel="noopener noreferrer">
                 <span class="resource-type ${escapeHtml(r.type || 'article')}">${escapeHtml(r.type || 'article')}</span>
-                <span>${escapeHtml(r.title)}</span>
+                <span>${escapeHtml(r.displayTitle || r.originalTitle || r.title || '未命名资料')}</span>
               </a>
             </li>
           `).join('');
@@ -4689,7 +5393,23 @@
       document.getElementById('view-week').textContent = plan.week;
 
       const tasksEl = document.getElementById('view-tasks');
-      tasksEl.innerHTML = plan.tasks.map(t => `<li>${escapeHtml(t)}</li>`).join('');
+      const taskBindings = Array.isArray(plan.taskBindings) ? plan.taskBindings : [];
+      const taskResources = ContentPack.getDayResources?.(day)?.resources || [];
+      tasksEl.innerHTML = (plan.tasks || []).map((task, taskIndex) => {
+        const binding = taskBindings.find(row => Number(row?.taskIndex) === taskIndex);
+        if (binding?.kind === 'hub' && binding.hubSlug) {
+          return `<li><a class="hub-link" href="#" data-hub-slug="${escapeHtml(binding.hubSlug)}">${escapeHtml(task)}</a></li>`;
+        }
+        if (binding?.kind === 'resource' && binding.sourceId) {
+          const resource = taskResources.find(row =>
+            String(row?.sourceId || row?.evidenceId || '') === String(binding.sourceId)
+          );
+          if (resource?.url) {
+            return `<li><a href="${escapeHtml(resource.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(task)}</a></li>`;
+          }
+        }
+        return `<li>${escapeHtml(task)}</li>`;
+      }).join('');
 
       // 渲染今日资料与每日练习
       renderResources(day);
@@ -4860,21 +5580,34 @@
       grid.innerHTML = projects.map((p) => {
         const { checked, total } = ProjectPlatform.progressStats(p.id);
         const pct = total ? Math.round((checked / total) * 100) : 0;
+        const cardPack =
+          p.packId && typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
+        let qualityNote = '';
         let badge;
         if (p.packStatus === 'generating') {
           badge = '<span class="pc-badge" style="color:#ea580c;background:rgba(234,88,12,0.12)">准备中…</span>';
         } else if (p.packStatus === 'partial') {
           const readyN =
-            (p.packId && typeof ContentPack !== 'undefined'
+            Number(p.packId && typeof ContentPack !== 'undefined'
               ? ContentPack.load(p.packId)?.meta?.generation?.readyThroughDay
-              : null) || 3;
-          badge = `<span class="pc-badge" style="color:#0891b2;background:rgba(8,145,178,0.12)">可先学 Day1–${readyN}</span>`;
+              : 0) || 0;
+          badge =
+            readyN > 0
+              ? `<span class="pc-badge" style="color:#0891b2;background:rgba(8,145,178,0.12)">可先学 Day1–${readyN}</span>`
+              : '<span class="pc-badge" style="color:#0891b2;background:rgba(8,145,178,0.12)">首批内容校验中</span>';
         } else if (p.packStatus === 'failed') {
           badge = '<span class="pc-badge" style="color:#dc2626;background:rgba(220,38,38,0.1)">生成失败</span>';
         } else if (p.packStatus === 'cancelled') {
           badge = '<span class="pc-badge" style="color:#64748b;background:rgba(100,116,139,0.12)">已停止</span>';
         } else if (p.packStatus === 'needs_review') {
-          badge = '<span class="pc-badge" style="color:#b45309;background:rgba(245,158,11,0.14)">内容待完善</span>';
+          const summary =
+            typeof PackWorkflowGate !== 'undefined'
+              ? PackWorkflowGate.summarizeIssues?.(cardPack?.meta?.quality?.workflowGate)
+              : '';
+          badge = '<span class="pc-badge" style="color:#b45309;background:rgba(245,158,11,0.14)">已生成 · 需要修复</span>';
+          qualityNote = summary
+            ? `<p class="pc-note">待修复：${escapeHtml(summary)}</p>`
+            : '<p class="pc-note">课包已经生成，但尚未通过最终质量门。</p>';
         } else if (p.isDefault || p.id === ProjectPlatform.DEFAULT_ID) {
           badge = '<span class="pc-badge is-demo">展示样例</span>';
         } else if (
@@ -4883,8 +5616,7 @@
         ) {
           badge = '<span class="pc-badge" style="color:#0e7490;background:rgba(8,145,178,0.1)">内置课表</span>';
         } else {
-          const pack = p.packId && typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
-          const hasHub = !!(pack?.hub?.navigation?.length);
+          const hasHub = !!(cardPack?.hub?.navigation?.length);
           badge = hasHub
             ? '<span class="pc-badge">专属课表</span>'
             : '<span class="pc-badge" style="color:#d97706;background:rgba(217,119,6,0.12)">课表就绪</span>';
@@ -4917,11 +5649,10 @@
             return '';
           }
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
-          const pack = typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
-          if (p.packStatus === 'needs_review' || pack?.meta?.quality?.needsReview) {
-            return `<button type="button" data-hub-project="${p.id}">修复日课与核心术语</button>`;
+          if (p.packStatus === 'needs_review' || cardPack?.meta?.quality?.needsReview) {
+            return `<button type="button" data-hub-project="${p.id}">修复课包</button>`;
           }
-          if (pack?.hub?.navigation?.length) return '';
+          if (cardPack?.hub?.navigation?.length) return '';
           return `<button type="button" data-hub-project="${p.id}">生成日课与核心术语</button>`;
         })();
         const matsBtn = (() => {
@@ -4934,9 +5665,8 @@
             return '';
           }
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
-          const pack = typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
-          if (!pack?.plan?.length) return '';
-          if (typeof ContentPack !== 'undefined' && ContentPack.hasDayMaterials(pack)) return '';
+          if (!cardPack?.plan?.length) return '';
+          if (typeof ContentPack !== 'undefined' && ContentPack.hasDayMaterials(cardPack)) return '';
           return `<button type="button" data-mats-project="${p.id}">生成每日练习</button>`;
         })();
         const isDemo = !!(p.isDefault || p.id === ProjectPlatform.DEFAULT_ID);
@@ -4955,6 +5685,7 @@
           <article class="project-card${isDemo ? ' is-demo' : ''}" data-open-project="${p.id}" role="button" tabindex="0">
             ${badge}
             <h2>${escapeHtml(p.title)}</h2>
+            ${qualityNote}
             ${demoNote}
             <p class="pc-meta">${escapeHtml(p.industry)} · ${escapeHtml(p.role)}${p.goal ? ' · ' + escapeHtml(p.goal) : ''} · ${p.days || 30} 天</p>
             <div class="pc-progress">
@@ -5085,6 +5816,44 @@
       }
     }
 
+    function setReflectionTab(tab, options = {}) {
+      const next = tab === 'notes' ? 'notes' : 'feynman';
+      document.querySelectorAll('[data-reflection-tab]').forEach((button) => {
+        const active = button.dataset.reflectionTab === next;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+        button.tabIndex = active ? 0 : -1;
+      });
+      document.querySelectorAll('[data-reflection-panel]').forEach((panel) => {
+        const active = panel.dataset.reflectionPanel === next;
+        panel.classList.toggle('active', active);
+        panel.hidden = !active;
+      });
+      if (options.focus) {
+        const input = document.getElementById(next === 'notes' ? 'notes-input' : 'feynman-input');
+        if (input) {
+          try { input.focus({ preventScroll: true }); } catch { input.focus(); }
+        }
+      }
+    }
+
+    function bindReflectionTabs() {
+      const tabs = document.querySelector('.reflection-tabs');
+      if (!tabs) return;
+      tabs.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-reflection-tab]');
+        if (!button) return;
+        setReflectionTab(button.dataset.reflectionTab, { focus: true });
+      });
+      tabs.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === 'ArrowRight' ? 'notes' : 'feynman';
+        setReflectionTab(next, { focus: false });
+        document.querySelector(`[data-reflection-tab="${next}"]`)?.focus();
+      });
+    }
+
     function focusSprintSection(focus) {
       const tabJumps = {
         hub: () => switchView('hub'),
@@ -5103,6 +5872,7 @@
       }
 
       switchView('sprint');
+      if (focus === 'feynman' || focus === 'notes') setReflectionTab(focus);
 
       const map = {
         practice: '#practice-section',
@@ -5232,23 +6002,31 @@
         progress('已开始：先准备前几天可学内容…', 1);
       }
 
-      function markSkeletonReady(projectId, readyThroughDay = 3) {
+      function markSkeletonReady(projectId, readyThroughDay = 0) {
+        const ready = Math.max(0, Number(readyThroughDay) || 0);
         skeletonReady = true;
         hadSkeleton = true;
         openProjectId = projectId || openProjectId || activeProjectId;
         const { root, fabLabel, openBtn, actions, hint, title } = els();
         root?.classList.add('is-skeleton-ready');
         actions?.classList.add('is-visible');
-        if (fabLabel && busy) fabLabel.textContent = '可先学';
-        if (title) title.textContent = `前 ${readyThroughDay} 天已可学`;
+        if (fabLabel && busy) fabLabel.textContent = ready > 0 ? '可先学' : '校验中';
+        if (title) title.textContent = ready > 0 ? `前 ${ready} 天已可学` : '首批内容校验中';
         if (hint) {
-          hint.textContent = `Day 1–${readyThroughDay} 已就绪，可先打开学习；其余天数继续在后台补全。`;
+          hint.textContent =
+            ready > 0
+              ? `Day 1–${ready} 已就绪，可先打开学习；其余天数继续在后台补全。`
+              : '日课、来源和练习正在进行完整性检查，通过后即可开始学习。';
         }
         if (openBtn) {
-          openBtn.hidden = !openProjectId;
+          openBtn.hidden = !openProjectId || ready <= 0;
           openBtn.textContent = '先开始学';
         }
-        appendLog(`骨架就绪：Day 1–${readyThroughDay} 可学，继续补全中…`);
+        appendLog(
+          ready > 0
+            ? `骨架就绪：Day 1–${ready} 可学，继续补全中…`
+            : '骨架已保存，首批内容质量校验中…'
+        );
         setExpanded(true);
       }
 
@@ -5310,7 +6088,7 @@
         setExpanded(true);
       }
 
-      function finishError(message) {
+      function finishError(message, { canResume = false } = {}) {
         busy = false;
         skeletonReady = false;
         abortCtrl = null;
@@ -5324,7 +6102,11 @@
         if (fabPct) fabPct.textContent = '!';
         if (title) title.textContent = '生成失败';
         if (status) status.textContent = message || '生成失败';
-        if (hint) hint.textContent = '生成已停止。可稍后再点路径上的「重新生成」。';
+        if (hint) {
+          hint.textContent = canResume
+            ? '生成已暂停。前几天仍可学习，可在路径卡片点「继续补全」。'
+            : '生成已停止。可稍后再点路径上的「重新生成」。';
+        }
         appendLog(message || '生成失败');
         actions?.classList.add('is-visible');
         if (openBtn) openBtn.hidden = true;
@@ -5436,6 +6218,19 @@
       }
     }
 
+    function packPerformanceSummary(pack) {
+      const metrics = pack?.meta?.performance?.aiMetrics || pack?.meta?.harness?.aiMetrics;
+      const calls = Number(metrics?.calls) || 0;
+      if (!calls) return '';
+      const durationMinutes = Math.max(0, Number(metrics.durationMs) || 0) / 60000;
+      const hit = Math.max(0, Number(metrics.cacheHitTokens) || 0);
+      const miss = Math.max(0, Number(metrics.cacheMissTokens) || 0);
+      const cacheTotal = hit + miss;
+      const parts = [`AI ${calls} 次`, `累计 ${durationMinutes.toFixed(1)} 分钟`];
+      if (cacheTotal > 0) parts.push(`缓存命中 ${Math.round((hit / cacheTotal) * 100)}%`);
+      return `（${parts.join(' · ')}）`;
+    }
+
     /** 把生成链路内部错误转成用户可理解的提示，避免露出开发侧术语。 */
     function friendlyGenError(err, fallback = '未知错误') {
       const code = err?.code || '';
@@ -5452,22 +6247,24 @@
       ) {
         return 'AI 服务当前繁忙，请稍等片刻后点「重新生成」再试';
       }
-      if (code === 'GLOSSARY_QUALITY' || /术语库质量未达标|合格术语|可视化类型/i.test(raw)) {
-        return '核心术语尚未达到可用标准，请再点「修复日课与核心术语」重试';
+      if (code === 'UPSTREAM_TIMEOUT') {
+        return '单次 AI 响应超时，已保存的内容不会丢失，请点「继续补全」';
       }
-      if (
-        code === 'WORKFLOW_BUDGET' ||
-        code === 'TOOL_BUDGET' ||
-        code === 'WALL_CLOCK' ||
-        /预算已耗尽|工具调用已达上限|墙钟时间/i.test(raw)
-      ) {
-        return '本次生成时间或次数已用完，请稍后重试，或点「继续补全」';
+      if (code === 'GLOSSARY_QUALITY' || /术语库质量未达标|合格术语|可视化类型/i.test(raw)) {
+        return '核心术语尚未达到可用标准，请再点「修复课包」重试';
+      }
+      if (code === 'WALL_CLOCK') return '本次生成达到总时长上限，请点「继续补全」';
+      if (code === 'TOOL_BUDGET' || code === 'WORKFLOW_BUDGET') {
+        return '本次生成达到调用次数上限，请点「继续补全」';
+      }
+      if (/预算已耗尽|工具调用已达上限|墙钟时间/i.test(raw)) {
+        return '本次生成达到安全上限，请点「继续补全」';
       }
       if (code === 'TOOL_NOT_ALLOWED' || code === 'CAPABILITY' || /白名单|能力等级/i.test(raw)) {
         return '当前无法完成这项生成，请稍后重试';
       }
       if (/质量门|Harness|Evaluator|Sprint|Contract|门禁|假绿|浅文/i.test(raw)) {
-        return '部分内容还需要再完善，请点「修复日课与核心术语」重试';
+        return '部分内容尚未通过质量门，请点「修复课包」重试';
       }
       return raw || fallback;
     }
@@ -5490,22 +6287,38 @@
           onProgress: setGenProgress,
           onSkeletonReady: (skel) => {
             renderProjectsHome();
-            const n = skel.meta?.generation?.readyThroughDay || 3;
+            const n = Number(skel.meta?.generation?.readyThroughDay) || 0;
             GenDock.markSkeletonReady(project.id, n);
+          },
+          onDayReady: (_pack, day) => {
+            renderProjectsHome();
+            GenDock.markSkeletonReady(project.id, day);
+            if (activeProject?.id === project.id) {
+              ContentPack.reloadActive?.();
+              renderFillHint();
+            }
           },
         });
         renderProjectsHome();
         if (typeof ContentPack !== 'undefined') ContentPack.reloadActive?.();
         if (document.body.classList.contains('mode-workspace')) renderFillHint();
+        const finalGate = pack.meta?.quality?.workflowGate;
+        const finalIssueSummary =
+          typeof PackWorkflowGate !== 'undefined'
+            ? PackWorkflowGate.summarizeIssues?.(finalGate, 3)
+            : '';
         GenDock.finishOk({
-          message: !pack.meta?.quality?.finalGatePassed
-            ? '课表已生成，部分日课或核心术语还需完善。请在路径卡片点击「修复日课与核心术语」。'
-            : '课表与日课已全部就绪。可继续浏览，或点「打开路径」开始学习。',
+          message:
+            (!pack.meta?.quality?.finalGatePassed
+              ? `课包主体已生成，但仍有定点问题待处理${
+                  finalIssueSummary ? `：${finalIssueSummary}` : ''
+                }。请点击「修复课包」，系统只处理对应 Day。`
+              : '课表与日课已全部就绪。可继续浏览，或点「打开路径」开始学习。') +
+            packPerformanceSummary(pack),
           projectId: project.id,
         });
       } catch (err) {
         console.error(err);
-        renderProjectsHome();
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           const cur = ProjectPlatform.get(project.id);
           if (cur?.packStatus === 'partial' && cur.packId) {
@@ -5513,19 +6326,24 @@
               '已停止补全。前几天仍可学习，需要时点「继续补全」。',
               { keepOpenProjectId: project.id }
             );
+            renderProjectsHome();
             return;
           }
           GenDock.finishCancelled('已停止生成。可点路径上的「重新生成」再试。');
+          renderProjectsHome();
           return;
         }
         const cur = ProjectPlatform.get(project.id);
         if (cur?.packStatus === 'partial' && cur.packId) {
           GenDock.finishError(
-            '补全未完成：' + friendlyGenError(err) + '。前几天仍可学，可点「继续补全」。'
+            '补全未完成：' + friendlyGenError(err) + '。前几天仍可学，可点「继续补全」。',
+            { canResume: true }
           );
+          renderProjectsHome();
           return;
         }
         GenDock.finishError('生成失败：' + friendlyGenError(err));
+        renderProjectsHome();
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
         }
@@ -5543,7 +6361,7 @@
       GenDock.start(`补全「${project.title || '学习路径'}」`, project.id);
       GenDock.markSkeletonReady(
         project.id,
-        ContentPack.load(project.packId)?.meta?.generation?.readyThroughDay || 3
+        Number(ContentPack.load(project.packId)?.meta?.generation?.readyThroughDay) || 0
       );
       try {
         const pack = await PackWorkflow.resume(project, {
@@ -5551,26 +6369,37 @@
           onSkeletonReady: () => {
             renderProjectsHome();
           },
+          onDayReady: (_pack, day) => {
+            renderProjectsHome();
+            GenDock.markSkeletonReady(project.id, day);
+            if (activeProject?.id === project.id) {
+              ContentPack.reloadActive?.();
+              renderFillHint();
+            }
+          },
         });
         renderProjectsHome();
         ContentPack.reloadActive?.();
         if (document.body.classList.contains('mode-workspace')) renderFillHint();
         GenDock.finishOk({
-          message: pack.meta?.quality?.finalGatePassed
-            ? '其余课表已补全，全部就绪。'
-            : '补全已完成，部分日课或核心术语还需完善，可点「修复日课与核心术语」。',
+          message:
+            (pack.meta?.quality?.finalGatePassed
+              ? '其余课表已补全，全部就绪。'
+              : '补全已完成，自动修复后仍有内容未通过质量门，可点「修复课包」。') +
+            packPerformanceSummary(pack),
           projectId: project.id,
         });
       } catch (err) {
         console.error(err);
-        renderProjectsHome();
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           GenDock.finishCancelled('已停止补全。前几天仍可学习。', {
             keepOpenProjectId: project.id,
           });
+          renderProjectsHome();
           return;
         }
-        GenDock.finishError('继续补全失败：' + friendlyGenError(err));
+        GenDock.finishError('继续补全失败：' + friendlyGenError(err), { canResume: true });
+        renderProjectsHome();
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
         }
@@ -5591,8 +6420,9 @@
         GenDock.setExpanded(true);
         return;
       }
-      GenDock.start('生成日课与核心术语', project.id);
-      setGenProgress('准备生成日课与核心术语…', 2);
+      const repairing = project.packStatus === 'needs_review';
+      GenDock.start(repairing ? '修复课包' : '生成日课与核心术语', project.id);
+      setGenProgress(repairing ? '正在按质量门原因修复课包…' : '准备生成日课与核心术语…', 2);
       try {
         const updatedPack = await PackWorkflow.repairHub(project, {
           onProgress: setGenProgress,
@@ -5601,7 +6431,7 @@
         renderProjectsHome();
         GenDock.finishOk({
           message: needsReview
-            ? '日课与核心术语已更新，仍有部分内容需完善，可再次点击「修复日课与核心术语」。'
+            ? '修复后仍有内容未通过质量门，可再次点击「修复课包」。'
             : '日课与核心术语已更新。进入路径后打开「日课 / 术语库」查看。',
           projectId: project.id,
         });
@@ -5612,7 +6442,7 @@
           GenDock.finishCancelled('已停止生成日课与核心术语。');
           return;
         }
-        GenDock.finishError('生成日课与核心术语失败：' + friendlyGenError(err));
+        GenDock.finishError((repairing ? '修复课包失败：' : '生成日课与核心术语失败：') + friendlyGenError(err));
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
           AiReview.openSettingsModal?.();
         }
@@ -5637,7 +6467,7 @@
         GenDock.finishOk({
           message: updatedPack?.meta?.quality?.finalGatePassed
             ? '每日练习已就绪。进入路径后打开任意一天即可看到。'
-            : '每日练习已更新，部分日课或核心术语还需完善，可点「修复日课与核心术语」。',
+            : '每日练习已更新，仍有内容未通过质量门，可点「修复课包」。',
           projectId: project.id,
         });
       } catch (err) {
@@ -5691,6 +6521,85 @@
             : friendlyGenError(err);
         GenDock.finishError('生成本课术语失败：' + message);
         if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') AiReview.openSettingsModal?.();
+      }
+    }
+
+    function refreshCourseGlossaryAction(view) {
+      const action = document.getElementById('course-glossary-action');
+      const status = document.getElementById('course-glossary-status');
+      const button = document.getElementById('btn-course-glossary');
+      const pack = ContentPack.getActive?.();
+      const hasLessons = Object.values(pack?.hub?.chapters || {}).some(
+        (markdown) => String(markdown || '').trim().length >= 80
+      );
+      const visible =
+        view === 'glossary' &&
+        !ContentPack.isBuiltin?.() &&
+        !!activeProject?.packId &&
+        hasLessons;
+      if (action) action.hidden = !visible;
+      if (!visible) return;
+      const lastRun = pack?.meta?.generation?.lastCourseGlossaryRun;
+      if (status && lastRun?.status === 'completed' && !GenDock.isBusy()) {
+        status.textContent =
+          Number(lastRun.added) > 0
+            ? `上次新增 ${Number(lastRun.added)} 条，跳过 ${Number(lastRun.skipped) || 0} 条`
+            : '全部日课已扫描，暂时没有值得新增的术语';
+      } else if (status && !status.textContent) {
+        status.textContent = 'AI 会扫描全部日课，只增量添加缺失术语';
+      }
+      if (button) button.disabled = GenDock.isBusy();
+    }
+
+    async function runCourseGlossaryGeneration() {
+      const project = activeProject;
+      const status = document.getElementById('course-glossary-status');
+      const button = document.getElementById('btn-course-glossary');
+      if (!project?.packId || ContentPack.isBuiltin?.()) return;
+      if (!AiReview.hasApiKey()) {
+        document.getElementById('ai-key-modal')?.classList.add('open');
+        return;
+      }
+      if (GenDock.isBusy()) {
+        alert('已有任务在生成中，请稍候完成后再试。也可先点「停止生成」。');
+        GenDock.setExpanded(true);
+        return;
+      }
+      GenDock.start('从全部日课补充术语库', project.id);
+      if (button) button.disabled = true;
+      const reportProgress = (message, percent) => {
+        if (status) status.textContent = message;
+        setGenProgress(message, percent);
+      };
+      reportProgress('扫描全部日课…', 5);
+      try {
+        const updatedPack = await PackWorkflow.generateCourseGlossary(project, {
+          onProgress: reportProgress,
+        });
+        ContentPack.reloadActive?.();
+        const run = updatedPack?.meta?.generation?.lastCourseGlossaryRun || {};
+        const added = Number(run.added) || 0;
+        const skipped = Number(run.skipped) || 0;
+        const resultMessage =
+          added > 0
+            ? `已新增 ${added} 条术语，跳过 ${skipped} 条`
+            : '没有发现值得新增的术语，已有内容保持不变';
+        if (status) status.textContent = resultMessage;
+        GenDock.finishOk({ message: resultMessage, projectId: project.id });
+        switchView('glossary');
+      } catch (err) {
+        console.error(err);
+        if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
+          if (status) status.textContent = '已停止，可再次点击继续扫描';
+          GenDock.finishCancelled('已停止补充术语库，可随时重试。');
+          return;
+        }
+        const message = friendlyGenError(err);
+        if (status) status.textContent = `补充失败：${message}，可重试`;
+        GenDock.finishError('补充术语库失败：' + message);
+        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') AiReview.openSettingsModal?.();
+      } finally {
+        if (button) button.disabled = false;
       }
     }
 
@@ -5802,6 +6711,7 @@
       document.getElementById('hot-view')?.classList.toggle('active', view === 'hot');
       document.getElementById('hub-view')?.classList.toggle('active', isHub);
       document.getElementById('tools-view')?.classList.toggle('active', view === 'tools');
+      refreshCourseGlossaryAction(view);
 
       if (view === 'tools' && sprintToolsApi) {
         sprintToolsApi.renderAll();
@@ -5890,6 +6800,9 @@
       document.getElementById('btn-day-glossary')?.addEventListener('click', (event) => {
         const day = Number(event.currentTarget?.dataset?.day) || appData.currentViewDay;
         void runDayGlossaryGeneration(day);
+      });
+      document.getElementById('btn-course-glossary')?.addEventListener('click', () => {
+        void runCourseGlossaryGeneration();
       });
       window.addEventListener('message', (event) => {
         const frame = document.getElementById('hub-frame');
@@ -6360,6 +7273,7 @@
       bindProjectEvents();
       bindEvents();
       bindPracticeEvents();
+      bindReflectionTabs();
 
       aiReviewApi = AiReview.init({
         onNeedKey: () => {
@@ -6406,6 +7320,18 @@
         });
       }
       showProjectsHome();
+      if (typeof PackGenerator.refreshGithubTitlesForPack === 'function') {
+        const customPacks = ProjectPlatform.list().filter(
+          (project) => !project.isDefault && project.packId
+        );
+        Promise.all(
+          customPacks.map((project) =>
+            PackGenerator.refreshGithubTitlesForPack(project.packId).catch(() => 0)
+          )
+        ).then((counts) => {
+          if (counts.some((count) => count > 0)) renderProjectsHome();
+        });
+      }
       SplashGate.init({
         openSettings: () => {
           if (aiReviewApi?.openSettingsModal) aiReviewApi.openSettingsModal();

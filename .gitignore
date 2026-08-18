@@ -34,6 +34,7 @@ PRD.md
 # 临时评测 / 本地打包缓存
 _eval_tmp/
 _tmp_pack_audit/
+.drawio-tmp/
 release-build/
 dist-out/
 assets/_backup_splash/

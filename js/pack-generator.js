@@ -26,6 +26,10 @@ const PackGenerator = (() => {
   const SEARCH_CONCURRENCY = 4;
   /** 同一生成任务内 query 去重缓存 */
   const _searchCache = new Map();
+  /** 同一任务内周候选池构建去重，持久结果写入 pack.meta.generation.retrievalPools */
+  const _weeklyPoolPromises = new Map();
+  const RETRIEVAL_POOL_VERSION = 'weekly-v1';
+  const RETRIEVAL_POOL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   /** 当前生成任务的 AbortSignal（由 beginJob / endJob 管理） */
   let _jobSignal = null;
 
@@ -35,6 +39,56 @@ const PackGenerator = (() => {
 
   function endJob() {
     _jobSignal = null;
+  }
+
+  function mergeAiMetrics(previous = {}, incoming = {}) {
+    const keys = [
+      'calls',
+      'failures',
+      'durationMs',
+      'retries',
+      'promptTokens',
+      'completionTokens',
+      'cacheHitTokens',
+      'cacheMissTokens',
+    ];
+    const merged = { stages: {} };
+    keys.forEach((key) => {
+      merged[key] = (Number(previous?.[key]) || 0) + (Number(incoming?.[key]) || 0);
+    });
+    const stageNames = new Set([
+      ...Object.keys(previous?.stages || {}),
+      ...Object.keys(incoming?.stages || {}),
+    ]);
+    stageNames.forEach((stage) => {
+      merged.stages[stage] = mergeAiMetrics(
+        { ...(previous?.stages?.[stage] || {}), stages: {} },
+        { ...(incoming?.stages?.[stage] || {}), stages: {} }
+      );
+      delete merged.stages[stage].stages;
+    });
+    return merged;
+  }
+
+  function storeHarnessSnapshot(pack, snapshot) {
+    if (!pack || !snapshot) return;
+    pack.meta = pack.meta || {};
+    const performance = pack.meta.performance || {};
+    const sessions = Array.isArray(performance.sessions) ? performance.sessions.slice(-7) : [];
+    sessions.push({
+      traceId: snapshot.traceId,
+      startedAt: snapshot.startedAt,
+      endedAt: snapshot.endedAt,
+      durationMs: snapshot.durationMs,
+      toolCalls: snapshot.toolCalls,
+      aiCalls: Number(snapshot.aiMetrics?.calls) || 0,
+    });
+    pack.meta.performance = {
+      aiMetrics: mergeAiMetrics(performance.aiMetrics, snapshot.aiMetrics),
+      sessions,
+      updatedAt: new Date().toISOString(),
+    };
+    pack.meta.harness = snapshot;
   }
 
   function throwIfAborted() {
@@ -131,6 +185,10 @@ const PackGenerator = (() => {
 3. 每条词必须讲清楚：非循环工作定义、真实口语、完整例子、易混边界、专属可视化（visual.kind）。
 4. term 字符串应尽量与日课正文用词一致（便于互链检索）。
 5. 宁少勿滥：不合格词条宁可不写，禁止用通用模板充数。`;
+
+  const HUB_STABLE_SYSTEM_PREFIX = `你是知径的日课教学设计与写作引擎。
+${HUB_TEACHING_CONTRACT}
+${DEPTH_CONTRACT}`;
 
   /** 按岗位生成视角文案，避免写死「PM」 */
   function roleLens(meta) {
@@ -232,7 +290,14 @@ const PackGenerator = (() => {
     throw new Error('AI 未返回可识别的 JSON，请重试');
   }
 
-  async function chat({ system, user, temperature = 0.3, max_tokens = 4096 }) {
+  async function chat({
+    system,
+    user,
+    temperature = 0.3,
+    max_tokens = 4096,
+    stage = 'other',
+    jsonMode = false,
+  }) {
     if (typeof AiReview === 'undefined' || !AiReview.chat) {
       throw new Error('智能功能未就绪，请先开启并填写 DeepSeek 密钥');
     }
@@ -255,6 +320,12 @@ const PackGenerator = (() => {
         temperature,
         max_tokens,
         signal: _jobSignal || undefined,
+        responseFormat: jsonMode ? { type: 'json_object' } : undefined,
+        onMetrics: (metrics) => {
+          if (typeof PackHarness !== 'undefined') {
+            PackHarness.recordAiCall?.({ ...metrics, stage });
+          }
+        },
       });
     });
   }
@@ -268,8 +339,15 @@ const PackGenerator = (() => {
 标题意向：${meta.title || '（由模型拟定）'}`;
   }
 
-  async function chatJson({ system, user, temperature = 0.28, max_tokens = 4096 }) {
-    const text = await chat({ system, user, temperature, max_tokens });
+  async function chatJson({
+    system,
+    user,
+    temperature = 0.28,
+    max_tokens = 4096,
+    stage = 'other',
+    jsonMode = false,
+  }) {
+    const text = await chat({ system, user, temperature, max_tokens, stage, jsonMode });
     return parseJsonLoose(text);
   }
 
@@ -364,7 +442,10 @@ const PackGenerator = (() => {
       /so\.com\/s\b/i.test(full) ||
       /sogou\.com\/web/i.test(full) ||
       /bing\.com\/search/i.test(full) ||
-      /google\.[^/]+\/search/i.test(full)
+      /google\.[^/]+\/search/i.test(full) ||
+      /github\.com\/(?:search|topics?|marketplace)(?:\/|$|\?)/i.test(full) ||
+      /bilibili\.com\/(?:v\/popular|ranking|read\/ranking)(?:\/|$|\?)/i.test(full) ||
+      /space\.bilibili\.com\/?$/i.test(full)
     ) {
       return true;
     }
@@ -383,6 +464,78 @@ const PackGenerator = (() => {
     if (/\.(edu|ac)\.[a-z]{2,}$/i.test(host) || host.endsWith('.edu')) score = Math.max(score, 24);
     if (host.endsWith('.gov.cn') || host.endsWith('.gov')) score = Math.max(score, 20);
     return score;
+  }
+
+  function evidenceTrustTier(url) {
+    const score = domainBoostScore(url);
+    if (score >= 20) return 'high';
+    if (score >= 8) return 'medium';
+    return 'contextual';
+  }
+
+  function normalizeSourceTier(value, fallback = 'contextual') {
+    const tier = String(value || '').trim().toLowerCase();
+    if (tier === 'primary' || tier === 'high') return 'high';
+    if (tier === 'secondary' || tier === 'medium') return 'medium';
+    if (tier === 'contextual') return 'contextual';
+    return fallback;
+  }
+
+  function sourcePlatform(url) {
+    const host = hostnameOf(url);
+    if (host.endsWith('wikipedia.org')) return 'wikipedia';
+    if (host === 'github.com' || host.endsWith('.github.com')) return 'github';
+    if (host === 'bilibili.com' || host.endsWith('.bilibili.com')) return 'bilibili';
+    if (host.endsWith('.gov') || host.endsWith('.gov.cn') || host.endsWith('.edu')) return 'official';
+    if (/^(docs?|developer|learn|support)\./i.test(host)) return 'official';
+    return 'web';
+  }
+
+  function sourceRoleForHit(hit) {
+    const platform = sourcePlatform(hit?.url);
+    if (platform === 'wikipedia') return 'reference';
+    if (platform === 'github') return 'example';
+    if (platform === 'bilibili') return 'tutorial';
+    if (platform === 'official') return 'primary';
+    return LEARNING_HINT_RE.test(`${hit?.title || ''} ${hit?.snippet || ''}`)
+      ? 'tutorial'
+      : 'context';
+  }
+
+  /** 将展示资源绑定到不可变 URL，并给后续正文/质检提供稳定证据编号。 */
+  function bindResourceEvidence(resources) {
+    return (resources || []).map((resource, index) => {
+      const evidenceId = `S${index + 1}`;
+      const originalTitle = String(resource.originalTitle || resource.title || '').trim();
+      const displayTitle = String(resource.displayTitle || originalTitle).trim();
+      const inferredTier = normalizeSourceTier(
+        resource.sourceTier || resource.trustTier,
+        evidenceTrustTier(resource.url)
+      );
+      return {
+        ...resource,
+        title: originalTitle,
+        originalTitle,
+        displayTitle,
+        sourceId: evidenceId,
+        evidenceId,
+        publisher: resource.publisher || hostnameOf(resource.url),
+        platform: resource.platform || sourcePlatform(resource.url),
+        sourceRole: resource.sourceRole || sourceRoleForHit(resource),
+        sourceTier: inferredTier,
+        trustTier: inferredTier,
+        retrievedAt: resource.retrievedAt || new Date().toISOString(),
+        evidence: {
+          id: evidenceId,
+          url: resource.url,
+          title: originalTitle,
+          originalTitle,
+          displayTitle,
+          trustTier: inferredTier,
+          boundAt: new Date().toISOString(),
+        },
+      };
+    });
   }
 
   function tokenizeIntent(text) {
@@ -466,50 +619,61 @@ const PackGenerator = (() => {
     ) {
       score -= 12;
     }
+    const platform = sourcePlatform(hit.url);
+    const full = String(hit.url || '');
+    if (platform === 'github') {
+      if (/github\.com\/[^/?#]+\/[^/?#]+(?:\/|$)/i.test(full)) score += 10;
+      else score -= 35;
+    }
+    if (platform === 'bilibili') {
+      if (/bilibili\.com\/video\/[A-Za-z0-9]+/i.test(full)) score += 10;
+      else score -= 35;
+    }
     return score;
   }
 
   /** 过滤资讯站 + 按学习相关度排序（不新增 API） */
   function rankAndFilterSearchHits(hits, { learnWhat = '', topic = '' } = {}) {
     return (hits || [])
-      .map((h) => ({ ...h, _score: scoreSearchHit(h, learnWhat, topic) }))
-      .filter((h) => h._score > -50)
+      .map((h) => {
+        const _score = scoreSearchHit(h, learnWhat, topic);
+        return {
+          ...h,
+          _score,
+          platform: h.platform || sourcePlatform(h.url),
+          sourceRole: h.sourceRole || sourceRoleForHit(h),
+          sourceTier: normalizeSourceTier(h.sourceTier, evidenceTrustTier(h.url)),
+        };
+      })
+      .filter((h) => h._score >= 10)
       .sort((a, b) => b._score - a._score)
-      .map(({ _score, ...rest }) => rest);
+      .map(({ _score, ...rest }) => ({ ...rest, qualityScore: _score }));
   }
 
   /**
-   * 同一搜索 Key 下改写 query：加教学意图词 + 可选 site 限定
+   * 将一天的学习意图压缩成有限、互补的检索通道；固定最多四路，避免平台通道被截断。
    */
-  function expandLearningQueries(rawQuery, { prefer = '', learnWhat = '', topic = '' } = {}) {
+  function buildLearningQueryLanes(rawQuery, { prefer = '', learnWhat = '', topic = '', type = '' } = {}) {
     const base = String(rawQuery || learnWhat || topic || '').trim();
     if (!base) return [];
     const pref = String(prefer || '').toLowerCase();
-    const teaching = `${base} 教程 方法 讲解`.replace(/\s+/g, ' ').trim();
+    const intent = `${base} ${learnWhat || ''} ${topic || ''} ${type || ''} ${pref}`.toLowerCase();
+    const practical = /代码|编程|开发|工具|模板|项目|实操|案例|仓库|开源|api|sdk|github|tool/.test(intent);
     const out = [];
-    const push = (q) => {
+    const push = (lane, platform, q) => {
       const s = String(q || '').trim();
-      if (s && !out.includes(s)) out.push(s);
+      if (s && !out.some((row) => row.query === s)) out.push({ lane, platform, query: s });
     };
-    push(teaching);
-    push(`${base} 入门 指南`);
-    if (pref.includes('wiki') || pref.includes('百科')) {
-      push(`${base} site:zh.wikipedia.org`);
-      push(`${base} site:wikipedia.org`);
-    }
-    if (pref.includes('video') || pref.includes('视频')) {
-      push(`${base} 教程 site:bilibili.com`);
-    }
-    if (pref.includes('official') || pref.includes('文档')) {
-      push(`${base} 官方 文档`);
-    }
-    if (pref.includes('paper')) {
-      push(`${base} PDF 讲义 OR 教材`);
-    }
-    // 默认再补一路百科/B站限定，提高高质量召回（仍走原搜索 API）
-    if (!pref.includes('wiki')) push(`${base} 定义 site:zh.wikipedia.org`);
-    if (!pref.includes('video')) push(`${base} 讲解 site:bilibili.com`);
+    push('teaching', 'web', `${base} 教程 方法 讲解`);
+    push('official', 'official', `${base} 官方 文档 指南`);
+    if (practical) push('example', 'github', `${base} 教程 示例 site:github.com`);
+    else push('reference', 'wikipedia', `${base} 定义 site:zh.wikipedia.org`);
+    push('lecture', 'bilibili', `${base} 系统讲解 教程 site:bilibili.com/video`);
     return out.slice(0, 4);
+  }
+
+  function expandLearningQueries(rawQuery, options = {}) {
+    return buildLearningQueryLanes(rawQuery, options).map((row) => row.query);
   }
 
   /**
@@ -552,19 +716,17 @@ const PackGenerator = (() => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         console.warn('[PackGenerator] search fail', q, data?.error?.message || res.status);
-        _searchCache.set(cacheKey, []);
         return [];
       }
       const results = (Array.isArray(data.results) ? data.results : [])
         .map(slimSearchHit)
         .filter((r) => r.url && /^https?:\/\//i.test(r.url) && !isBlockedResourceUrl(r.url));
       const out = results.length >= minResults ? results : results;
-      _searchCache.set(cacheKey, out);
+      if (out.length) _searchCache.set(cacheKey, out);
       return out;
     } catch (e) {
       rethrowAbort(e);
       console.warn('[PackGenerator] search error', q, e);
-      _searchCache.set(cacheKey, []);
       return [];
     }
   }
@@ -574,21 +736,40 @@ const PackGenerator = (() => {
     const uniq = [];
     const seenQ = new Set();
     for (const raw of queries || []) {
-      const q = String(raw || '').trim();
+      const descriptor =
+        raw && typeof raw === 'object'
+          ? { ...raw, query: String(raw.query || '').trim() }
+          : { query: String(raw || '').trim(), lane: 'general', platform: 'web' };
+      const q = descriptor.query;
       if (!q || seenQ.has(q)) continue;
       seenQ.add(q);
-      uniq.push(q);
+      uniq.push(descriptor);
       if (uniq.length >= maxQueries) break;
     }
-    const perQuery = await mapPool(uniq, SEARCH_CONCURRENCY, (q) => searchWeb(q, { count }));
+    const perQuery = await mapPool(uniq, SEARCH_CONCURRENCY, (row) =>
+      searchWeb(row.query, { count })
+    );
     const merged = [];
-    const seenUrl = new Set();
+    const byUrl = new Map();
     perQuery.forEach((hits, i) => {
-      const q = uniq[i];
+      const descriptor = uniq[i];
       (hits || []).forEach((h) => {
-        if (seenUrl.has(h.url)) return;
-        seenUrl.add(h.url);
-        merged.push({ ...h, query: q });
+        const previous = byUrl.get(h.url);
+        if (previous) {
+          previous.retrievalLanes = [
+            ...new Set([...(previous.retrievalLanes || []), descriptor.lane]),
+          ];
+          return;
+        }
+        const row = {
+          ...h,
+          query: descriptor.query,
+          lane: descriptor.lane,
+          platform: descriptor.platform || sourcePlatform(h.url),
+          retrievalLanes: [descriptor.lane],
+        };
+        byUrl.set(h.url, row);
+        merged.push(row);
       });
     });
     return merged;
@@ -598,6 +779,47 @@ const PackGenerator = (() => {
     const rows = (results || []).slice(0, limit);
     if (!rows.length) return '（无搜索结果；请仅用定性表述，禁止编造精确 URL/数据）';
     return JSON.stringify(rows, null, 0);
+  }
+
+  function selectSourcePortfolio(candidates, { learnWhat = '', topic = '', limit = 3 } = {}) {
+    const scored = (candidates || [])
+      .filter((row) => row?.url && !isBlockedResourceUrl(row.url))
+      .map((row) => ({
+        ...row,
+        _score: Number.isFinite(Number(row.qualityScore))
+          ? Number(row.qualityScore)
+          : scoreSearchHit(row, learnWhat, topic),
+        platform: row.platform || sourcePlatform(row.url),
+        sourceRole: row.sourceRole || sourceRoleForHit(row),
+        sourceTier: normalizeSourceTier(row.sourceTier, evidenceTrustTier(row.url)),
+      }))
+      .filter((row) => row._score >= 10)
+      .sort((a, b) => b._score - a._score);
+    const selected = [];
+    const usedHosts = new Set();
+    const usedRoles = new Set();
+    const take = (row) => {
+      if (!row || selected.some((item) => item.url === row.url)) return;
+      selected.push(row);
+      usedHosts.add(hostnameOf(row.url));
+      usedRoles.add(row.sourceRole);
+    };
+    take(scored.find((row) => row.sourceTier === 'high' || row.sourceRole === 'primary'));
+    for (const row of scored) {
+      if (selected.length >= limit) break;
+      const host = hostnameOf(row.url);
+      if (usedHosts.has(host) && scored.some((item) => !usedHosts.has(hostnameOf(item.url)))) continue;
+      if (usedRoles.has(row.sourceRole) && scored.some((item) => !usedRoles.has(item.sourceRole))) continue;
+      take(row);
+    }
+    for (const row of scored) {
+      if (selected.length >= limit) break;
+      take(row);
+    }
+    return selected.map(({ _score, qualityScore, ...row }) => ({
+      ...row,
+      qualityScore: _score,
+    }));
   }
 
   /**
@@ -621,6 +843,11 @@ const PackGenerator = (() => {
         return {
           title: String(hit.title || r.title || '').trim().slice(0, 80),
           url,
+          snippet: hit.snippet || '',
+          platform: hit.platform || sourcePlatform(url),
+          sourceRole: hit.sourceRole || sourceRoleForHit(hit),
+          sourceTier: normalizeSourceTier(hit.sourceTier, evidenceTrustTier(url)),
+          qualityScore: Number(hit.qualityScore) || scoreSearchHit(hit, learnWhat, topic),
           type: allowed.has(String(r.type))
             ? String(r.type)
             : /bilibili\.com/i.test(url)
@@ -640,7 +867,9 @@ const PackGenerator = (() => {
       picked = picked.concat(extra);
     }
 
-    return picked.slice(0, 4);
+    return bindResourceEvidence(
+      selectSourcePortfolio(picked, { learnWhat, topic, limit: 3 })
+    );
   }
 
   /** 从已排序/原始 hits 里挑可直接打开的具体页 */
@@ -652,14 +881,23 @@ const PackGenerator = (() => {
         ...h,
         _score: typeof h._score === 'number' ? h._score : scoreSearchHit(h, learnWhat, topic),
       }))
-      .filter((h) => h._score > -60)
+      .filter((h) => h._score >= 10)
       .sort((a, b) => b._score - a._score);
 
-    return scored.slice(0, need).map((r) => ({
+    return bindResourceEvidence(selectSourcePortfolio(scored, {
+      learnWhat,
+      topic,
+      limit: need,
+    }).map((r) => ({
       title: String(r.title || topic || '参考资料').trim().slice(0, 80),
       url: r.url,
+      snippet: r.snippet || '',
+      platform: r.platform,
+      sourceRole: r.sourceRole,
+      sourceTier: r.sourceTier,
+      qualityScore: r.qualityScore,
       type: /bilibili\.com/i.test(r.url) ? 'video' : 'article',
-    }));
+    })));
   }
 
   /**
@@ -688,11 +926,335 @@ const PackGenerator = (() => {
           type: 'article',
         });
       }
-      return out;
+      return bindResourceEvidence(out);
     } catch (e) {
       rethrowAbort(e);
       console.warn('[PackGenerator] wikipedia opensearch failed', e);
       return [];
+    }
+  }
+
+  function retrievalFingerprint(value) {
+    let hash = 2166136261;
+    const input = String(value || '');
+    for (let index = 0; index < input.length; index++) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function weekNumberForDay(day) {
+    return Math.max(1, Math.ceil((Number(day) || 1) / 7));
+  }
+
+  function buildWeeklyQueryLanes(meta, weekPlan) {
+    const rows = Array.isArray(weekPlan) ? weekPlan : [];
+    const weekLabel = String(rows[0]?.week || `第${weekNumberForDay(rows[0]?.day)}周`)
+      .replace(/^第\d+周[：:\s]*/, '')
+      .trim();
+    const topics = [...new Set(rows.map((row) => String(row?.topic || '').trim()).filter(Boolean))]
+      .slice(0, 5)
+      .join(' ');
+    const base = `${meta?.industry || ''} ${meta?.role || ''} ${weekLabel} ${topics}`
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180);
+    return [
+      {
+        lane: 'weekly-authority',
+        platform: 'web',
+        query: `${base} 官方 文档 教程 方法`,
+      },
+      {
+        lane: 'weekly-lecture',
+        platform: 'bilibili',
+        query: `${base} 系统讲解 教程 site:bilibili.com/video`,
+      },
+    ];
+  }
+
+  function weekNeedsGithub(weekPlan) {
+    const blob = (weekPlan || [])
+      .flatMap((row) => [row?.topic, ...(row?.tasks || [])])
+      .join(' ');
+    return /代码|编程|开发|工具|模板|项目|实操|仓库|开源|API|SDK|GitHub/i.test(blob);
+  }
+
+  function poolFingerprint(meta, weekPlan) {
+    return retrievalFingerprint(
+      JSON.stringify({
+        version: RETRIEVAL_POOL_VERSION,
+        industry: meta?.industry || '',
+        role: meta?.role || '',
+        week: (weekPlan || []).map((row) => ({
+          day: Number(row?.day),
+          week: row?.week || '',
+          topic: row?.topic || '',
+        })),
+      })
+    );
+  }
+
+  function retrievalStatsForPack(pack) {
+    pack.meta = pack.meta || {};
+    pack.meta.generation = pack.meta.generation || {};
+    pack.meta.generation.retrievalStats = {
+      deepseekSearchCalls: 0,
+      weeklyPoolBuilds: 0,
+      weeklyPoolHits: 0,
+      targetedSearchCalls: 0,
+      metadataCalls: 0,
+      durationMs: 0,
+      ...(pack.meta.generation.retrievalStats || {}),
+    };
+    return pack.meta.generation.retrievalStats;
+  }
+
+  async function resolveResourceMetadata(urls, { githubQuery = '', githubLimit = 4 } = {}) {
+    const uniqueUrls = [...new Set((urls || []).map(String).map((url) => url.trim()).filter(Boolean))]
+      .slice(0, 10);
+    if (!uniqueUrls.length && !githubQuery) return { results: [], githubResults: [] };
+    if (typeof PackHarness !== 'undefined') {
+      const guard = PackHarness.guardTool('api.meta.resolve', {
+        urls: uniqueUrls.length,
+        github: !!githubQuery,
+      });
+      if (!guard.ok) return { results: [], githubResults: [] };
+    }
+    try {
+      const response = await fetch('/api/meta/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          urls: uniqueUrls,
+          githubQuery: String(githubQuery || '').slice(0, 180),
+          githubLimit: Math.min(5, Math.max(1, Number(githubLimit) || 4)),
+        }),
+        signal: _jobSignal || undefined,
+      });
+      if (!response.ok) return { results: [], githubResults: [] };
+      const data = await response.json();
+      return {
+        results: Array.isArray(data?.results) ? data.results : [],
+        githubResults: Array.isArray(data?.githubResults) ? data.githubResults : [],
+      };
+    } catch (error) {
+      rethrowAbort(error);
+      console.warn('[PackGenerator] resource metadata degraded', error);
+      return { results: [], githubResults: [] };
+    }
+  }
+
+  function mergeResolvedMetadata(hits, metadataRows) {
+    const byUrl = new Map((metadataRows || []).map((row) => [String(row?.url || ''), row]));
+    return (hits || []).map((hit) => {
+      const meta = byUrl.get(String(hit?.url || '')) || {};
+      const originalTitle = String(hit?.originalTitle || hit?.title || '').trim();
+      return {
+        ...hit,
+        originalTitle,
+        displayTitle: String(meta.displayTitle || hit?.displayTitle || originalTitle).trim().slice(0, 120),
+        description: String(meta.description || hit?.description || '').trim().slice(0, 500),
+        contentExcerpt: String(meta.contentExcerpt || hit?.contentExcerpt || '').trim().slice(0, 1200),
+        publisher: String(meta.publisher || hit?.publisher || '').trim(),
+        canonicalUrl: String(meta.canonicalUrl || hit?.canonicalUrl || hit?.url || '').trim(),
+        metadataProvider: String(meta.provider || hit?.metadataProvider || '').trim(),
+      };
+    });
+  }
+
+  function needsGithubTitleRefresh(resource) {
+    return (
+      sourcePlatform(resource?.url) === 'github' &&
+      !String(resource?.displayTitle || '').trim().endsWith('（GitHub）')
+    );
+  }
+
+  async function refreshCachedGithubTitles(pack) {
+    const dayRows = Object.values(pack?.dayResources || {}).flatMap(
+      (row) => row?.resources || []
+    );
+    const poolRows = Object.values(pack?.meta?.generation?.retrievalPools || {}).flatMap(
+      (pool) => pool?.hits || []
+    );
+    const staleRows = [...dayRows, ...poolRows].filter(needsGithubTitleRefresh);
+    const urls = [
+      ...new Set(staleRows.map((row) => String(row?.url || '').trim()).filter(Boolean)),
+    ];
+    if (!urls.length) return 0;
+
+    const metadataRows = [];
+    const stats = retrievalStatsForPack(pack);
+    for (let index = 0; index < urls.length; index += 10) {
+      const metadata = await resolveResourceMetadata(urls.slice(index, index + 10));
+      stats.metadataCalls += 1;
+      metadataRows.push(...metadata.results);
+    }
+    const byUrl = new Map(
+      metadataRows
+        .filter((row) => String(row?.displayTitle || '').trim())
+        .map((row) => [String(row.url || ''), row])
+    );
+    let refreshed = 0;
+    for (const row of staleRows) {
+      const metadata = byUrl.get(String(row?.url || ''));
+      if (!metadata) continue;
+      const displayTitle = String(metadata.displayTitle || '').trim().slice(0, 120);
+      if (!displayTitle || displayTitle === row.displayTitle) continue;
+      row.displayTitle = displayTitle;
+      row.description = String(metadata.description || row.description || '').trim().slice(0, 500);
+      row.contentExcerpt = String(metadata.contentExcerpt || row.contentExcerpt || '')
+        .trim()
+        .slice(0, 1200);
+      row.publisher = String(metadata.publisher || row.publisher || '').trim();
+      row.canonicalUrl = String(metadata.canonicalUrl || row.canonicalUrl || row.url || '').trim();
+      row.metadataProvider = String(metadata.provider || row.metadataProvider || '').trim();
+      if (row.evidence) row.evidence.displayTitle = displayTitle;
+      refreshed += 1;
+    }
+    return refreshed;
+  }
+
+  async function refreshGithubTitlesForPack(packId) {
+    const pack = ContentPack.load(packId);
+    if (!pack) return 0;
+    const refreshed = await refreshCachedGithubTitles(pack);
+    if (refreshed > 0) {
+      pack.updatedAt = new Date().toISOString();
+      ContentPack.save(pack);
+    }
+    return refreshed;
+  }
+
+  async function assignWeeklyPool(meta, weekPlan, hits) {
+    if (!hits.length) return {};
+    const candidates = hits.slice(0, 18).map((hit, index) => ({
+      id: `C${index + 1}`,
+      title: hit.displayTitle || hit.title,
+      description: hit.description || hit.snippet || '',
+      platform: hit.platform || sourcePlatform(hit.url),
+      sourceTier: hit.sourceTier || evidenceTrustTier(hit.url),
+    }));
+    const system = `你是课程资料分配器。只输出 JSON 对象；只能选择给定候选 id，禁止输出 URL 或新标题。`;
+    const user = `## 学习者\n${metaBrief(meta)}\n\n## 本周日课\n${JSON.stringify(
+      (weekPlan || []).map((row) => ({ day: row.day, topic: row.topic, tasks: row.tasks }))
+    ).slice(0, 4000)}\n\n## 候选\n${JSON.stringify(candidates).slice(0, 8000)}\n\n## Task\n{"days":[{"day":1,"candidateIds":["C1","C2"]}]}\n每日至多3条，可跨相邻日复用高质量基础资料；不相关则留空。`;
+    try {
+      const raw = await chatJson({
+        system,
+        user,
+        temperature: 0.1,
+        max_tokens: 2400,
+        stage: 'materials.assignment',
+        jsonMode: true,
+      });
+      const rows = Array.isArray(raw?.days) ? raw.days : [];
+      const allowed = new Set(candidates.map((row) => row.id));
+      return Object.fromEntries(
+        rows.map((row) => [
+          String(Number(row?.day)),
+          [...new Set((row?.candidateIds || []).map(String).filter((id) => allowed.has(id)))].slice(0, 3),
+        ])
+      );
+    } catch (error) {
+      rethrowAbort(error);
+      console.warn('[PackGenerator] weekly assignment degraded to local ranking', error);
+      return {};
+    }
+  }
+
+  async function ensureWeeklyResourcePool(pack, meta, weekPlan) {
+    const stats = retrievalStatsForPack(pack);
+    const week = weekNumberForDay(weekPlan?.[0]?.day);
+    pack.meta = pack.meta || {};
+    pack.meta.generation = pack.meta.generation || {};
+    pack.meta.generation.retrievalPools = {
+      ...(pack.meta.generation.retrievalPools || {}),
+    };
+    const pools = pack.meta.generation.retrievalPools;
+    const fingerprint = poolFingerprint(meta, weekPlan);
+    const existing = pools[String(week)];
+    const age = Date.now() - Date.parse(existing?.fetchedAt || 0);
+    if (
+      existing?.version === RETRIEVAL_POOL_VERSION &&
+      existing?.fingerprint === fingerprint &&
+      Array.isArray(existing.hits) &&
+      existing.hits.length &&
+      Number.isFinite(age) &&
+      age >= 0 &&
+      age < RETRIEVAL_POOL_TTL_MS
+    ) {
+      existing.cacheHits = (Number(existing.cacheHits) || 0) + 1;
+      stats.weeklyPoolHits += 1;
+      return existing;
+    }
+    if (existing) {
+      for (const descriptor of existing.queries || []) {
+        _searchCache.delete(`${String(descriptor?.query || '').trim()}::${SEARCH_COUNT}`);
+      }
+    }
+    const promiseKey = `${pack.id || 'pack'}:${week}:${fingerprint}`;
+    if (_weeklyPoolPromises.has(promiseKey)) return _weeklyPoolPromises.get(promiseKey);
+    const pending = (async () => {
+      const startedAt = Date.now();
+      const queries = buildWeeklyQueryLanes(meta, weekPlan);
+      stats.deepseekSearchCalls += queries.length;
+      let hits = await searchMany(queries, { count: SEARCH_COUNT, maxQueries: 2 });
+      const githubQuery = weekNeedsGithub(weekPlan)
+        ? `${meta?.industry || ''} ${(weekPlan || []).map((row) => row.topic).join(' ')} in:name,description,readme`
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 180)
+        : '';
+      let githubResults = [];
+      if (githubQuery) {
+        const githubMetadata = await resolveResourceMetadata([], {
+          githubQuery,
+          githubLimit: 4,
+        });
+        stats.metadataCalls += 1;
+        githubResults = githubMetadata.githubResults || [];
+      }
+      hits = [...hits, ...githubResults];
+      const ranked = rankAndFilterSearchHits(hits, {
+        learnWhat: (weekPlan || []).map((row) => row.topic).join('；'),
+        topic: String(weekPlan?.[0]?.week || ''),
+      }).slice(0, 20);
+      const metadataRows = [];
+      for (let index = 0; index < ranked.length; index += 10) {
+        const metadata = await resolveResourceMetadata(
+          ranked.slice(index, index + 10).map((row) => row.url)
+        );
+        stats.metadataCalls += 1;
+        metadataRows.push(...metadata.results);
+      }
+      const enriched = mergeResolvedMetadata(ranked, metadataRows);
+      enriched.forEach((hit, index) => {
+        hit.candidateId = `C${index + 1}`;
+      });
+      const assignments = await assignWeeklyPool(meta, weekPlan, enriched);
+      const pool = {
+        version: RETRIEVAL_POOL_VERSION,
+        fingerprint,
+        week,
+        fetchedAt: new Date().toISOString(),
+        queries,
+        hits: enriched,
+        assignments,
+        targetedDays: {},
+        cacheHits: 0,
+      };
+      pools[String(week)] = pool;
+      stats.weeklyPoolBuilds += 1;
+      stats.durationMs += Date.now() - startedAt;
+      return pool;
+    })();
+    _weeklyPoolPromises.set(promiseKey, pending);
+    try {
+      return await pending;
+    } finally {
+      _weeklyPoolPromises.delete(promiseKey);
     }
   }
 
@@ -732,7 +1294,7 @@ ${formatSearchBlock(searchHits, 12)}
   "nonGoals": ["本路径明确不教什么1","…"]
 }
 要求：competencies 6-10 条，覆盖认知→方法→实战→表达；bloom 随阶段抬升；observable 禁止「了解/掌握」。`;
-    return chatJson({ system, user, max_tokens: 3200 });
+    return chatJson({ system, user, max_tokens: 3200, stage: 'outline.outcomes', jsonMode: true });
   }
 
   async function designPhaseWeekScaffold(meta, outcomes) {
@@ -758,7 +1320,7 @@ ${JSON.stringify(outcomes).slice(0, 4500)}
 - weekThemes 必须覆盖满 ${meta.days} 天，每周 theme 点名行业对象，禁止「综合提升」
 - 每个 weekTheme.phaseName 必须来自 phases[].name，且随 week 递增只前进不回跳（同一 phase 可跨多周，但不可 A→B→A）
 - 每周 focusQuestion 要像岗位会问的真问题`;
-    return chatJson({ system, user, max_tokens: 3500 });
+    return chatJson({ system, user, max_tokens: 3500, stage: 'outline.scaffold', jsonMode: true });
   }
 
   async function generateOutline(meta) {
@@ -789,7 +1351,14 @@ ${JSON.stringify({
   }
 }
 要求：weekThemes 覆盖满 ${meta.days} 天；每周带 phaseName（来自 phases，只前进不回跳）；保留领域锚点与误区；title 具体。`;
-    const final = await chatJson({ system, user, temperature: 0.2, max_tokens: 4000 });
+    const final = await chatJson({
+      system,
+      user,
+      temperature: 0.2,
+      max_tokens: 4000,
+      stage: 'outline.finalize',
+      jsonMode: true,
+    });
     if (!final.outcomes) final.outcomes = outcomes;
     if (!final.title) final.title = scaffold.title || meta.title;
     return normalizeOutlineCalendar(final, meta.days);
@@ -972,12 +1541,23 @@ ${JSON.stringify({
   /** 注入知识库回链，保证每天任务能打开对应章节 */
   function injectHubBacklinkTasks(plan) {
     return (plan || []).map((d) => {
+      if (typeof TaskResourceBinder !== 'undefined' && TaskResourceBinder.bindDay) {
+        return TaskResourceBinder.bindDay({ dayPlan: d, resources: [] });
+      }
       const topic = String(d.topic || `Day ${d.day}`);
       const hubTask = `打开日课「Day ${d.day} · ${topic}」精读本日章节，勾选完成清单`;
       let tasks = Array.isArray(d.tasks) ? d.tasks.map(String) : [];
       if (!tasks.some((t) => /日课|知识库/.test(t))) {
         if (!tasks.length) tasks = [hubTask, '整理对比表或清单', '合上资料做场景判断'];
-        else tasks = [hubTask, ...tasks.filter((t) => !/^阅读|^读/.test(t))].slice(0, 3);
+        else {
+          tasks = [
+            hubTask,
+            ...tasks.filter(
+              (t) =>
+                !/^(?:阅读|读|精读|研读|观看|查看|参考|浏览|学习).*(?:《|报告|白皮书|课程|视频|文章|指南|文档|B站|GitHub|维基)/i.test(t)
+            ),
+          ].slice(0, 3);
+        }
         while (tasks.length < 3) {
           tasks.push(['整理对比表或清单', '合上资料复述今日判断', '写下仍不确定的问题'][tasks.length - 1]);
         }
@@ -1415,7 +1995,59 @@ ${JSON.stringify({
       used[fp] = (used[fp] || 0) + 1;
       picked.push(fallback);
     }
-    return picked.slice(0, 3);
+    const kinds = ['recall', 'application', 'transfer'];
+    return picked.slice(0, 3).map((exercise, index) => ({
+      ...exercise,
+      type: kinds[index],
+      objective: topic,
+      ref:
+        index === 0
+          ? `参考答案应准确复述「${topic}」的对象、关键步骤或边界。`
+          : index === 1
+            ? `参考答案应把「${topic}」用于当日任务，并逐条满足 rubric。`
+            : `参考答案应说明「${topic}」迁移到新场景时保留的原则、调整的约束与取舍理由。`,
+      commonMistakes:
+        index === 0
+          ? ['只复述标题，没有对象或边界', '依赖资料照抄，未完成闭卷提取']
+          : index === 1
+            ? ['给出泛泛建议，没有落到当日 task', '结论没有可检查的产出']
+            : ['机械套用原场景答案', '没有说明新约束导致的调整'],
+      feedbackMode: index === 0 ? 'immediate' : index === 1 ? 'rubric' : 'delayed-self-explain',
+    }));
+  }
+
+  function normalizeDailyExerciseContract(exercises, dayPlan, meta = {}) {
+    const topic = String(dayPlan?.topic || '今日主题').trim();
+    const fallback = buildVariedFallbackExercises(dayPlan, meta);
+    const source = (Array.isArray(exercises) ? exercises : [])
+      .filter((exercise) => exercise && String(exercise.q || exercise.question || '').trim())
+      .slice(0, 3);
+    const kinds = ['recall', 'application', 'transfer'];
+    while (source.length < 3) source.push(fallback[source.length]);
+    return source.map((exercise, index) => {
+      const base = fallback[index];
+      const rubric = (Array.isArray(exercise.rubric) ? exercise.rubric : base.rubric)
+        .map(String)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, 4);
+      const commonMistakes = (
+        Array.isArray(exercise.commonMistakes) ? exercise.commonMistakes : base.commonMistakes
+      )
+        .map(String)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, 4);
+      return {
+        q: String(exercise.q || exercise.question || base.q).trim().slice(0, 220),
+        type: kinds[index],
+        objective: String(exercise.objective || topic).trim().slice(0, 100),
+        rubric: rubric.length ? rubric : base.rubric,
+        ref: String(exercise.ref || base.ref).trim().slice(0, 360),
+        commonMistakes: commonMistakes.length ? commonMistakes : base.commonMistakes,
+        feedbackMode: String(exercise.feedbackMode || base.feedbackMode),
+      };
+    });
   }
 
   /** 整包按 stem 预算重建练习（质量门 / 修复环共用） */
@@ -1509,7 +2141,7 @@ ${JSON.stringify({
   "dailySeeds": [{"day":${dayStart},"bloom":"记忆|理解|应用|分析|评价|创造","seedTopic":"当日种子主题（含领域对象）","mustHit":"必须碰到的概念/对象","avoid":"本日不要空讲的套话"}]
 }
 要求：dailySeeds 恰好覆盖 ${dayStart} 到 ${dayEnd} 每一天；bloom 周内由低到高略递进；若本段已是后半程（dayStart≥15）则 bloom 以应用/分析/评价/创造为主；seedTopic 禁止「复习/总结」占超过 1 天；本周阶段应与大纲一致，勿引入其它阶段主题。`;
-    return chatJson({ system, user, max_tokens: 2800 });
+    return chatJson({ system, user, max_tokens: 2800, stage: 'plan.week-goals', jsonMode: true });
   }
 
   async function expandWeekToDays(meta, outline, weekGoals, dayStart, dayEnd) {
@@ -1536,15 +2168,15 @@ ${lockedPhase}
     "week": "第n周：主题",
     "topic": "当日主题（≤18字，含领域对象）",
     "tasks": [
-      "输入型任务：读日课本章 / 看资料（点名对象）",
+      "输入型任务：打开系统内本日日课并完成清单",
       "加工型任务：对比/画图/列表等",
       "提取型任务：不看资料复述或场景判断"
     ],
     "why": "为何排在这一天（1句）"
   }
 ]
-要求：tasks 正好 3 条且三类齐全；phase 必须整段都是「${lockedPhase}」；禁止三条都是「阅读/笔记/复述」万能句；topic 与 weekGoals.dailySeeds 对齐。`;
-    const raw = await chatJson({ system, user, max_tokens: 4000 });
+要求：tasks 正好 3 条且三类齐全；phase 必须整段都是「${lockedPhase}」；禁止三条都是「阅读/笔记/复述」万能句；课表阶段尚无外部资料，禁止编写书名、报告名、课程名、视频名、URL 或任何假定存在的外部材料；topic 与 weekGoals.dailySeeds 对齐。`;
+    const raw = await chatJson({ system, user, max_tokens: 4000, stage: 'plan.days' });
     const arr = Array.isArray(raw) ? raw : raw.days || raw.plan || [];
     return arr
       .map((d, i) => {
@@ -1879,7 +2511,14 @@ ${JSON.stringify({
 - 每个 term 必须能在日课正文中找到原词或明显同义写法；禁止日课未覆盖的空降黑话
 - 覆盖不同阶段的日课；少用万能词（沟通/学习能力）
 - why 写清「补充日课哪一点」（定义边界 / 易混 / 面试口述）`;
-    return chatJson({ system, user, temperature: 0.2, max_tokens: 3200 });
+    return chatJson({
+      system,
+      user,
+      temperature: 0.2,
+      max_tokens: 3200,
+      stage: 'glossary.candidates-hub',
+      jsonMode: true,
+    });
   }
 
   async function inventGlossaryTermList(meta, outline, pack) {
@@ -1912,7 +2551,14 @@ ${JSON.stringify({
   ]
 }
 要求：16-22 个词；优先课表 topic 中的概念；少用万能词。`;
-    return chatJson({ system, user, temperature: 0.25, max_tokens: 2800 });
+    return chatJson({
+      system,
+      user,
+      temperature: 0.25,
+      max_tokens: 2800,
+      stage: 'glossary.candidates-outline',
+      jsonMode: true,
+    });
   }
 
   /**
@@ -1984,7 +2630,14 @@ ${retryContext.length ? `## 上轮未通过项（只修这些字段）\n${JSON.s
 - sections 至少含：是什么、${judgmentLabel}、面试怎么答
 - 禁止写「PM 视角」标签（除非岗位是产品经理）
 - 若有日课出处：补充边界/易混/例子，不要整章粘贴`;
-    const data = await chatJson({ system, user, temperature: 0.16, max_tokens: 3000 });
+    const data = await chatJson({
+      system,
+      user,
+      temperature: 0.16,
+      max_tokens: 3000,
+      stage: 'glossary.core',
+      jsonMode: true,
+    });
     return normalizeGlossary(data.glossary || data, meta);
   }
 
@@ -2026,7 +2679,14 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
 - roles 每个节点必须有 actor；states 每个节点必须有 badge
 - compare/matrix 至少两个 group，且每个节点都要有 group
 - 禁止通用「识别术语→判断边界→形成行动」四格`;
-    const data = await chatJson({ system, user, temperature: 0.14, max_tokens: 2600 });
+    const data = await chatJson({
+      system,
+      user,
+      temperature: 0.14,
+      max_tokens: 2600,
+      stage: 'glossary.visual',
+      jsonMode: true,
+    });
     const rows = Array.isArray(data?.visuals) ? data.visuals : [];
     return rows
       .map((row) => {
@@ -2281,6 +2941,8 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
       sourceType,
       sourceDays: sourceDays.length
         ? sourceDays
+        : Array.isArray(term.sourceDays) && term.sourceDays.length
+          ? [...new Set(term.sourceDays.map(Number).filter((day) => Number.isInteger(day) && day > 0))]
         : Number(term.sourceDay) > 0
           ? [Number(term.sourceDay)]
           : [],
@@ -2311,6 +2973,10 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
 
     // 阶段 A：先把定义、例子、易混边界做扎实；多准备少量候选，给配图阶段留余量。
     const acceptedCore = new Map();
+    (Array.isArray(options.seedCoreEntries) ? options.seedCoreEntries : []).forEach((entry) => {
+      const key = String(entry?.term || '').toLowerCase();
+      if (key && passesGlossaryCoreQuality(entry)) acceptedCore.set(key, entry);
+    });
     const coreTarget = Math.min(Math.max(targetCount, targetCount + 2), terms.length);
     const maxCoreRounds = 2;
     for (let round = 1; round <= maxCoreRounds; round++) {
@@ -2378,6 +3044,9 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
           if (!passesGlossaryCoreQuality(g)) continue;
           acceptedCore.set(key, g);
         }
+        if (typeof options.onCoreCheckpoint === 'function') {
+          await options.onCoreCheckpoint([...acceptedCore.values()]);
+        }
       }
       if (acceptedCore.size >= coreTarget) break;
     }
@@ -2388,6 +3057,12 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
     // 阶段 B：只为已验收的核心词条配图，失败时按具体视觉字段定点修复。
     const corePool = [...acceptedCore.values()];
     const accepted = new Map();
+    (Array.isArray(options.seedAcceptedEntries) ? options.seedAcceptedEntries : []).forEach(
+      (entry) => {
+        const key = String(entry?.term || '').toLowerCase();
+        if (key && passesGlossaryQuality(entry)) accepted.set(key, entry);
+      }
+    );
     const maxVisualRounds = 2;
     for (let round = 1; round <= maxVisualRounds; round++) {
       const pending = corePool.filter(
@@ -2448,6 +3123,9 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
           const key = String(entry.term || '').toLowerCase();
           if (!key || accepted.has(key) || !passesGlossaryQuality(entry)) continue;
           accepted.set(key, entry);
+        }
+        if (typeof options.onCheckpoint === 'function') {
+          await options.onCheckpoint([...accepted.values()]);
         }
       }
 
@@ -2659,17 +3337,18 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
       const sourceDays = [
         ...new Set([...(previous?.sourceDays || []), ...(entry.sourceDays || [])]),
       ].sort((a, b) => a - b);
-      const sourceType = !previous
-        ? entry.sourceType || 'core'
-        : previous.sourceType === 'core' || !previous.sourceType
-          ? previous.sourceType || 'core'
-          : entry.sourceType || previous.sourceType;
-      byTerm.set(key, {
-        ...previous,
-        ...entry,
-        sourceType,
-        sourceDays: sourceDays.length ? sourceDays : undefined,
-      });
+      if (previous) {
+        byTerm.set(key, {
+          ...previous,
+          sourceDays: sourceDays.length ? sourceDays : previous.sourceDays,
+        });
+      } else {
+        byTerm.set(key, {
+          ...entry,
+          sourceType: entry.sourceType || 'core',
+          sourceDays: sourceDays.length ? sourceDays : undefined,
+        });
+      }
     });
     return [...byTerm.values()];
   }
@@ -2693,7 +3372,14 @@ ${JSON.stringify(rows).slice(0, 7000)}
 ## Task
 {"terms":[{"term":"","module":"行业|技术|方法|商业|面试","why":"为何本课必须会","sourceDay":${Number(day)}}]}
 要求：返回 6–8 个候选；禁止任务句、章节标题套话和正文中不存在的空降黑话。`;
-    const data = await chatJson({ system, user, temperature: 0.18, max_tokens: 1800 });
+    const data = await chatJson({
+      system,
+      user,
+      temperature: 0.18,
+      max_tokens: 1800,
+      stage: 'glossary.day-candidates',
+      jsonMode: true,
+    });
     return Array.isArray(data?.terms) ? data.terms : [];
   }
 
@@ -2724,6 +3410,180 @@ ${JSON.stringify(rows).slice(0, 7000)}
       );
     });
     return list.slice(0, limit);
+  }
+
+  function glossaryCandidatesForCourse(rawTerms, pack, limit = 14) {
+    const existingKeys = new Set(
+      (Array.isArray(pack?.glossary) ? pack.glossary : []).flatMap((entry) => [
+        glossaryTermKey(entry?.term),
+        ...(Array.isArray(entry?.aliases) ? entry.aliases.map(glossaryTermKey) : []),
+      ])
+    );
+    const rows = summarizeHubForGlossary(pack);
+    const base = glossaryCandidates(rawTerms, pack, limit + existingKeys.size + 8);
+    return base
+      .filter((candidate) => !existingKeys.has(glossaryTermKey(candidate?.term)))
+      .map((candidate) => {
+        const term = String(candidate.term || '').trim();
+        const stem = term.replace(/(模型|指标|评分|方法|框架|体系)$/u, '');
+        const sourceDays = new Set(
+          [
+            ...(Array.isArray(candidate.sourceDays) ? candidate.sourceDays : []),
+            candidate.sourceDay,
+          ]
+            .map(Number)
+            .filter((day) => Number.isInteger(day) && day > 0)
+        );
+        rows.forEach((row) => {
+          if (
+            String(row.excerpt || '').includes(term) ||
+            (stem.length >= 2 && String(row.excerpt || '').includes(stem)) ||
+            (row.candidates || []).some(
+              (value) => String(value).includes(term) || term.includes(String(value))
+            ) ||
+            String(row.topic || '').includes(term)
+          ) {
+            if (Number(row.day) > 0) sourceDays.add(Number(row.day));
+          }
+        });
+        return {
+          ...candidate,
+          sourceDay: [...sourceDays][0],
+          sourceDays: [...sourceDays].sort((a, b) => a - b),
+        };
+      })
+      .slice(0, limit);
+  }
+
+  async function inventGlossaryTermsForCourse(meta, pack) {
+    const rows = summarizeHubForGlossary(pack);
+    const existing = (pack.glossary || []).map((entry) => entry?.term).filter(Boolean);
+    const system = `你是「${meta.industry}」整课术语策展人。
+只从全部日课中挑选值得长期复用、但尚未进入术语库的名词、指标或方法名。
+输出契约：仅输出一个合法 JSON 对象。`;
+    const user = `## 全部日课摘要
+${JSON.stringify(rows).slice(0, 22000)}
+
+## 已有术语（禁止重复或改写后重复）
+${JSON.stringify(existing).slice(0, 4000)}
+
+## Task
+{"terms":[{"term":"","module":"行业|技术|方法|商业|面试","why":"为何值得收录","sourceDay":1}]}
+要求：筛选 10–16 个候选；必须能在日课中找到依据；排除已有术语、章节标题套话、任务句和只在单句中偶然出现的普通词。`;
+    const data = await chatJson({
+      system,
+      user,
+      temperature: 0.16,
+      max_tokens: 2600,
+      stage: 'glossary.course-candidates',
+      jsonMode: true,
+    });
+    return Array.isArray(data?.terms) ? data.terms : [];
+  }
+
+  async function generateCourseGlossaryForPack(packId, onProgress = () => {}, opts = {}) {
+    beginJob(opts.signal);
+    let sessionOutcome = 'ok';
+    let sessionStarted = false;
+    try {
+      const pack = ContentPack.load(packId);
+      if (!pack) throw new Error('找不到当前路径');
+      const rows = summarizeHubForGlossary(pack);
+      if (!rows.length || rows.every((row) => !String(row.excerpt || '').trim())) {
+        const error = new Error('日课正文尚未就绪，请先完成日课生成');
+        error.code = 'DAY_LESSON_MISSING';
+        throw error;
+      }
+      if (typeof PackHarness !== 'undefined') {
+        PackHarness.beginSession({
+          packId,
+          industry: pack.meta?.industry,
+          role: pack.meta?.role,
+          days: pack.meta?.days,
+        });
+        sessionStarted = true;
+        PackHarness.setRole('generator');
+      }
+      const meta = {
+        title: pack.meta?.title,
+        industry: pack.meta?.industry,
+        role: pack.meta?.role,
+        goal: pack.meta?.goal,
+        days: pack.meta?.days || pack.plan?.length || 30,
+        notes: pack.meta?.notes || '',
+      };
+      const outline = outlineFromPack(pack);
+      const existingKeys = new Set((pack.glossary || []).map((entry) => glossaryTermKey(entry?.term)));
+      onProgress(`扫描 ${rows.length} 篇日课…`, 10);
+      let curated = [];
+      try {
+        curated = await inventGlossaryTermsForCourse(meta, pack);
+      } catch (error) {
+        rethrowAbort(error);
+        rethrowGlossaryOperationalError(error);
+        console.warn('[PackGenerator] course glossary curation failed; use local candidates', error);
+      }
+      onProgress('筛选尚未收录的关键术语…', 30);
+      const terms = glossaryCandidatesForCourse(curated, pack, 14);
+      const existingExcluded = curated.filter((item) =>
+        existingKeys.has(glossaryTermKey(item?.term))
+      ).length;
+      pack.meta = pack.meta || {};
+      pack.meta.generation = pack.meta.generation || {};
+      if (!terms.length) {
+        pack.meta.generation.lastCourseGlossaryRun = {
+          status: 'completed',
+          added: 0,
+          skipped: existingExcluded,
+          candidateCount: 0,
+          at: new Date().toISOString(),
+        };
+        ContentPack.save(pack);
+        onProgress('没有发现值得新增的术语', 100);
+        return pack;
+      }
+      onProgress(`生成并校验 ${terms.length} 个候选术语…`, 45);
+      const generated = await generateGlossary(
+        meta,
+        outline,
+        (message) => onProgress(message, 70),
+        pack,
+        {
+          terms,
+          targetCount: Math.min(8, terms.length),
+          requiredKinds: Math.min(2, terms.length),
+          sourceType: 'day',
+          incremental: true,
+        }
+      );
+      const beforeKeys = new Set((pack.glossary || []).map((entry) => glossaryTermKey(entry?.term)));
+      pack.glossary = mergeGlossaryEntries(pack.glossary, generated);
+      const added = pack.glossary.filter(
+        (entry) => !beforeKeys.has(glossaryTermKey(entry?.term))
+      ).length;
+      const skipped = existingExcluded + Math.max(0, terms.length - added);
+      pack.meta.generation.lastCourseGlossaryRun = {
+        status: 'completed',
+        added,
+        skipped,
+        candidateCount: terms.length,
+        at: new Date().toISOString(),
+      };
+      pack.meta.glossaryHubHitRate = Number(glossaryHubHitRate(pack.glossary, pack).toFixed(3));
+      runPackQualityGate(pack, outline, { rewritePhases: false });
+      pack.updatedAt = new Date().toISOString();
+      ContentPack.save(pack);
+      onProgress(`已新增 ${added} 条术语，跳过 ${skipped} 条`, 100);
+      return pack;
+    } catch (error) {
+      sessionOutcome = isAbortError(error) ? 'cancelled' : 'failed';
+      throw error;
+    } finally {
+      if (sessionStarted && typeof PackHarness !== 'undefined') {
+        PackHarness.endSession(sessionOutcome);
+      }
+      endJob();
+    }
   }
 
   async function generateGlossaryForDayPack(packId, day, onProgress = () => {}, opts = {}) {
@@ -2897,7 +3757,7 @@ ${JSON.stringify(outline?.outcomes?.competencies || []).slice(0, 2500)}
 ## Task
 {"skills":[{"id":"s1","label":"能力名","desc":"一句话：在什么场景做出什么判断/交付"}]}
 要求：6-8 维；贴合「${meta.industry}/${meta.role}」真实考核；desc 含场景动词，禁止「综合素质强」。`;
-    return chatJson({ system, user, max_tokens: 2000 });
+    return chatJson({ system, user, max_tokens: 2000, stage: 'extras.skills', jsonMode: true });
   }
 
   async function generateInterviewBank(meta, outline, skills) {
@@ -2913,7 +3773,7 @@ ${JSON.stringify(outline?.phases || []).slice(0, 1200)}
 ## Task
 {"interview":[{"id":"i1","cat":"分类","days":"1-7","q":"题干","hint":"得分要点","followUp":"追问一句"}]}
 要求：16-20 题；题干能追问细节与权衡；覆盖行业认知/方法/项目/行为；hint 写得分点不是标准答案全文；days 映射到学习阶段。`;
-    return chatJson({ system, user, max_tokens: 4500 });
+    return chatJson({ system, user, max_tokens: 4500, stage: 'extras.interview', jsonMode: true });
   }
 
   async function generatePortfolioMilestones(meta, outline, skills) {
@@ -2929,7 +3789,7 @@ ${JSON.stringify({ phases: outline?.phases, skills }).slice(0, 2500)}
 ## Task
 {"portfolio":[{"id":"p1","title":"里程碑","phase":"阶段","days":"区间","items":["可检查交付物1","2"]}]}
 要求：4-8 项；每项 items 2-4 个可拍照/可链接的交付物；从分析备忘→对比表→小项目→面试故事线递进。`;
-    return chatJson({ system, user, max_tokens: 2800 });
+    return chatJson({ system, user, max_tokens: 2800, stage: 'extras.portfolio', jsonMode: true });
   }
 
   async function generateExtras(meta, outline, existingPack = {}) {
@@ -3098,6 +3958,35 @@ ${JSON.stringify({ phases: outline?.phases, skills }).slice(0, 2500)}
     return daily;
   }
 
+  function reusableHubStructure(pack, meta, outline, plan) {
+    const navigation = Array.isArray(pack?.hub?.navigation) ? pack.hub.navigation : [];
+    const itemCount = navigation.reduce((sum, module) => sum + (module.items || []).length, 0);
+    if (!navigation.length || itemCount !== (plan || []).length) return null;
+    const base = buildDailyHubStructure(meta, outline, plan);
+    const existingItemsByDay = new Map();
+    navigation.forEach((module) => {
+      (module.items || []).forEach((item) => {
+        const day = dayNumberFromChapter({ slug: item.slug, days: item.days }, plan);
+        if (day) existingItemsByDay.set(day, item);
+      });
+    });
+    if (existingItemsByDay.size !== (plan || []).length) return null;
+    base.title = pack.hub?.title || base.title;
+    base.modules.forEach((module, index) => {
+      const existingModule = navigation[index];
+      if (existingModule?.title) module.title = existingModule.title;
+      if (existingModule?.description) module.description = existingModule.description;
+      if (existingModule?.color) module.color = existingModule.color;
+      module.chapters.forEach((chapter) => {
+        const day = chapterDayNum(chapter, plan);
+        const existingItem = existingItemsByDay.get(day);
+        if (existingItem?.title) chapter.title = existingItem.title;
+      });
+    });
+    base.learningPath = base.modules.map((module) => module.title);
+    return base;
+  }
+
   // ─── ⑥⑦ 知识库：按天导航 + 日课设计 → 例题 → 深写（微学习 / worked example chaining） ───
 
   async function generateHubStructure(meta, outline, plan) {
@@ -3120,7 +4009,14 @@ ${JSON.stringify({
 ## Task
 {"title":"","moduleTitles":["与 modules 等长的短标题"]}
 要求：moduleTitles 数量=模块数；标题含行业对象，禁止「综合提升」。`;
-      const polish = await chatJson({ system, user, temperature: 0.2, max_tokens: 1200 });
+      const polish = await chatJson({
+        system,
+        user,
+        temperature: 0.2,
+        max_tokens: 1200,
+        stage: 'hub.navigation-polish',
+        jsonMode: true,
+      });
       if (Array.isArray(polish?.moduleTitles)) {
         polish.moduleTitles.forEach((t, i) => {
           if (base.modules[i] && t) base.modules[i].title = String(t).slice(0, 28);
@@ -3245,10 +4141,9 @@ ${JSON.stringify({
 
   async function designDailyLesson(meta, dayPlan) {
     const { role } = roleLens(meta);
-    const system = `你是「${meta.industry}」日课教学设计师（Microlearning：一课一目标 + Worked Example）。
+    const system = `${HUB_STABLE_SYSTEM_PREFIX}
+当前职责：日课教学设计师（Microlearning：一课一目标 + Worked Example）。
 日课是每日主教材，必须具有指导性质（读者学完能动手）。
-${HUB_TEACHING_CONTRACT}
-${DEPTH_CONTRACT}
 硬性规则：只输出一个 JSON 对象。禁止写「类比：先有生活例子」这类元指令，必须写出真实类比内容。`;
     const user = `## Audience
 行业：${meta.industry}｜岗位：${role}｜目标：${meta.goal || '入门'}
@@ -3284,22 +4179,173 @@ ${JSON.stringify({
   "checklist": ["今天完成后自检1","2"]
 }
 要求：concepts 3-5 个，全部贴合本日 topic；workedExample.steps ≥3；禁止通用 PM 三问（痛点/代价/成功标准）原样复用。`;
-    return chatJson({ system, user, temperature: 0.3, max_tokens: 4000 });
+    return chatJson({
+      system,
+      user,
+      temperature: 0.3,
+      max_tokens: 4000,
+      stage: 'hub.lesson-design',
+      jsonMode: true,
+    });
+  }
+
+  function buildLessonEvidenceBindings(searchHits) {
+    const seen = new Set();
+    const seenIds = new Set();
+    const bindings = [];
+    for (const hit of searchHits || []) {
+      const url = String(hit?.url || '').trim();
+      if (!url || seen.has(url) || !isSafeHttpUrl(url) || isBlockedResourceUrl(url)) continue;
+      seen.add(url);
+      const requestedId = String(hit?.sourceId || hit?.evidenceId || '').toUpperCase();
+      let id = /^S\d+$/.test(requestedId) && !seenIds.has(requestedId)
+        ? requestedId
+        : `S${bindings.length + 1}`;
+      while (seenIds.has(id)) id = `S${Number(id.slice(1)) + 1}`;
+      seenIds.add(id);
+      bindings.push({
+        id,
+        title: String(hit.title || '参考来源').trim().slice(0, 120),
+        url,
+        snippet: String(hit.snippet || '').trim().slice(0, 320),
+        trustTier: evidenceTrustTier(url),
+      });
+      if (bindings.length >= 4) break;
+    }
+    return bindings;
+  }
+
+  function lineHasPreciseClaim(line) {
+    return (
+      /20\d{2}\s*年/.test(String(line || '')) ||
+      /(?:同比|环比|增长|下降|市场规模|渗透率|转化率|营收|成本).{0,40}(?:\d+(?:\.\d+)?%|\d+(?:\.\d+)?\s*(?:万|亿|元|美元))/.test(String(line || ''))
+    );
+  }
+
+  function sourceSupportsPreciseLine(source, line) {
+    const snippet = String(source?.snippet || '').trim();
+    const numbers = String(line || '').match(/\d+(?:\.\d+)?/g) || [];
+    return !!snippet && numbers.length > 0 && numbers.every((number) => snippet.includes(number));
+  }
+
+  function sanitizeUnsupportedPreciseClaims(markdown, evidenceBindings) {
+    const bindings = Array.isArray(evidenceBindings) ? evidenceBindings : [];
+    return String(markdown || '')
+      .split('\n')
+      .map((line) => {
+        if (!lineHasPreciseClaim(line)) {
+          return line;
+        }
+        const citedIds = [...line.matchAll(/\[(S\d+)\]/g)].map((match) => match[1]);
+        const supported = citedIds.some((id) => {
+          const source = bindings.find((item) => item.id === id);
+          return sourceSupportsPreciseLine(source, line);
+        });
+        if (supported) return line;
+        return line.replace(
+          /20\d{2}\s*年|\d+(?:\.\d+)?%|\d+(?:\.\d+)?\s*(?:万|亿|元|美元|家企业|名用户)/g,
+          '具体数值需查官方或原始资料核实'
+        );
+      })
+      .join('\n');
+  }
+
+  function canonicalizeLessonSourceSection(markdown, evidenceBindings) {
+    const bindings = Array.isArray(evidenceBindings) ? evidenceBindings : [];
+    const md = String(markdown || '').trim();
+    const sourceAt = md.search(/(?:^|\n)##\s*(?:来源|证据来源|Sources?)\s*(?:\n|$)/i);
+    const body = (sourceAt >= 0 ? md.slice(0, sourceAt) : md).trimEnd();
+    if (!bindings.length) {
+      return `${body}\n\n## 来源\n\n本日未取得可核验证据；正文仅保留定性教学说明，精确数据请查官方或原始资料核实。`.trim();
+    }
+    const sourceLines = bindings.map(
+        (source) =>
+          `- [${source.id}] [${source.title}](${source.url})（信任级别：${source.trustTier}）`
+      );
+    return `${body}\n\n## 来源\n\n${sourceLines.join('\n')}`.trim();
+  }
+
+  function normalizeLessonEvidenceCitations(markdown, evidenceBindings) {
+    const bindings = Array.isArray(evidenceBindings) ? evidenceBindings : [];
+    const allowed = new Map(
+      bindings.map((source) => [String(source?.id || '').toUpperCase(), source])
+    );
+    const text = String(markdown || '');
+    const sourceAt = text.search(/(?:^|\n)##\s*(?:来源|证据来源|Sources?)\s*(?:\n|$)/i);
+    const body = sourceAt >= 0 ? text.slice(0, sourceAt) : text;
+    const normalizedBody = body
+      .split('\n')
+      .map((line) => {
+        let next = line.replace(/\s*\[(S\d+)\]/gi, (match, id) => {
+          const normalizedId = String(id).toUpperCase();
+          return allowed.has(normalizedId) ? ` [${normalizedId}]` : '';
+        });
+        if (!lineHasPreciseClaim(next)) return next;
+        const citedIds = [...next.matchAll(/\[(S\d+)\]/gi)].map((match) =>
+          String(match[1]).toUpperCase()
+        );
+        const citedSupport = citedIds.some((id) =>
+          sourceSupportsPreciseLine(allowed.get(id), next)
+        );
+        if (citedSupport) return next;
+        const supportingSource = bindings.find((source) =>
+          sourceSupportsPreciseLine(source, next)
+        );
+        if (supportingSource?.id) {
+          return `${next.trimEnd()} [${String(supportingSource.id).toUpperCase()}]`;
+        }
+        return sanitizeUnsupportedPreciseClaims(next, []);
+      })
+      .join('\n')
+      .trim();
+    return canonicalizeLessonSourceSection(normalizedBody, bindings);
+  }
+
+  function ensureLessonEvidenceBacklinks(markdown, evidenceBindings) {
+    const bindings = Array.isArray(evidenceBindings) ? evidenceBindings : [];
+    return normalizeLessonEvidenceCitations(markdown, bindings);
+  }
+
+  function normalizePackLessonSourceSections(pack) {
+    if (!pack?.hub?.chapters) return pack;
+    const plan = pack.plan || [];
+    Object.entries(pack.hub.chapters).forEach(([slug, markdown]) => {
+      const day = dayNumberFromChapter({ slug }, plan);
+      if (!day) return;
+      const resources =
+        pack.dayResources?.[String(day)]?.resources ||
+        pack.dayResources?.[day]?.resources ||
+        [];
+      const bindings = resources
+        .map((source, index) => ({
+          id: String(source?.sourceId || source?.evidenceId || source?.id || `S${index + 1}`),
+          title: String(source?.title || '参考来源').trim(),
+          url: String(source?.url || '').trim(),
+          trustTier: String(source?.sourceTier || source?.trustTier || evidenceTrustTier(source?.url)),
+        }))
+        .filter((source) => source.id && source.title && isSafeHttpUrl(source.url));
+      pack.hub.chapters[slug] = normalizeLessonEvidenceCitations(markdown, bindings);
+    });
+    return pack;
   }
 
   async function writeDailyLessonMarkdown(meta, chapter, dayPlan, lesson, searchHits, { strict = false } = {}) {
     const { role, sectionHeading, decisionSubhead } = roleLens(meta);
-    const system = `你是「${meta.industry}」领域日课作者与「${role}」教练。
+    const evidenceBindings = buildLessonEvidenceBindings(searchHits);
+    const system = `${HUB_STABLE_SYSTEM_PREFIX}
+当前职责：领域日课作者与岗位教练。
 本日是 Day ${dayPlan.day} 的独立微课，只写这一天，禁止写成 Day x-y 合集。
 本文是日课主教材：以「怎么做」指导读者完成今日任务；术语深挖留给术语库。
 借鉴：worked example（先看完整解题步骤再练习）+ 提取练习收尾。
-${HUB_TEACHING_CONTRACT}
-${DEPTH_CONTRACT}
 ${strict ? '【加严】上一稿太空洞：禁止模板句、禁止把标题当定义、禁止元指令式类比。' : ''}
-若有 search_results：事实须能被 snippet 支撑；可附 1 条来自结果的延伸阅读链接。
+证据规则：evidence_bindings 是事实的唯一依据。正文事实句使用 [S1] 形式引用；末尾必须有「## 来源」并逐条回链。
+精确数字只有在对应来源 snippet 明确出现同一数字时才可写；无证据或 snippet 不支持时只写定性判断与核验路径。
 输出契约：只输出一个 JSON 对象 {"slug":"","markdown":""}。`;
 
-    const user = `## 章节
+    const user = `## Audience
+行业：${meta.industry}｜岗位：${role}｜目标：${meta.goal || '入门'}
+
+## 章节
 slug: ${chapter.slug}
 title: ${chapter.title}
 关联天数：必须写 **Day ${dayPlan.day}**（单个数字，禁止区间）
@@ -3309,6 +4355,9 @@ ${JSON.stringify(lesson).slice(0, 5500)}
 
 ## search_results
 ${formatSearchBlock(searchHits, 10)}
+
+## evidence_bindings
+${JSON.stringify(evidenceBindings)}
 
 ## 正文结构（Markdown，${Number(dayPlan.day) >= 15 ? '3000-3800' : Number(dayPlan.day) >= 8 ? '2400-3200' : '1800-2600'} 字；这是最低质量预算，不得用重复句凑字；Day≥15 必须写满例题步骤与至少 1 个取舍判断）
 # {标题}
@@ -3326,20 +4375,34 @@ ${decisionSubhead}（用设计稿里的 roleJudgments，要具体）
 ## 常见误区（用设计稿 misconceptions）
 ## 提取练习（合上资料再答，3题）
 ## 今日完成清单
+## 来源（[S1] 标号、标题、URL 必须与 evidence_bindings 一致）
 
 ## 禁止
 - 不要「先有生活/业务例子，再回到正式定义」这类制作说明
 - 不要表格「定义」列只重复章节标题
 - 不要把多天内容塞进一篇`;
 
-    const data = await chatJson({ system, user, temperature: strict ? 0.35 : 0.28, max_tokens: 7000 });
+    const data = await chatJson({
+      system,
+      user,
+      temperature: strict ? 0.35 : 0.28,
+      max_tokens: 7000,
+      stage: strict ? 'hub.lesson-write-strict' : 'hub.lesson-write',
+      jsonMode: true,
+    });
     const md = data?.markdown || data?.content || '';
     const slug = data?.slug || chapter.slug;
-    return { slug, markdown: rewriteRoleLensInText(String(md), meta) };
+    return {
+      slug,
+      markdown: ensureLessonEvidenceBacklinks(
+        rewriteRoleLensInText(String(md), meta),
+        evidenceBindings
+      ),
+    };
   }
 
   /** 用设计稿拼出可用日课（优于空壳 stub） */
-  function richFallbackFromLesson(meta, chapter, dayPlan, lesson) {
+  function richFallbackFromLesson(meta, chapter, dayPlan, lesson, evidenceBindings = []) {
     const { role, sectionHeading, decisionSubhead } = roleLens(meta);
     const L = lesson || {};
     const concepts = Array.isArray(L.concepts) ? L.concepts : [];
@@ -3419,10 +4482,16 @@ ${retrieval || `1. 用一句话定义「${dayPlan.topic}」\n2. 举一个该用/
 ## 今日完成清单
 
 ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
+
+## 来源
+
+${evidenceBindings.length
+    ? evidenceBindings.map((source) => `- [${source.id}] [${source.title}](${source.url})（信任级别：${source.trustTier}）`).join('\n')
+    : '本日未取得可核验证据；正文仅保留定性教学说明，精确数据请查官方或原始资料核实。'}
 `;
   }
 
-  async function generateHubBodies(meta, chapterBatch, plan) {
+  async function generateHubBodies(meta, chapterBatch, plan, evidenceSources = []) {
     const map = new Map();
     const ch = chapterBatch[0];
     if (!ch) return map;
@@ -3430,12 +4499,26 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
     const preferStrict = Number(dayPlan.day) >= 15;
     try {
       const lesson = await designDailyLesson(meta, dayPlan);
-      const searchHits = hasSearchKey()
-        ? await searchMany([`${meta.industry} ${dayPlan.topic || ch.title}`], {
-            count: 6,
-            maxQueries: 1,
-          })
-        : [];
+      let searchHits = (Array.isArray(evidenceSources) ? evidenceSources : [])
+        .filter((source) => source?.url && source?.title)
+        .map((source) => ({
+          sourceId: source.sourceId || source.evidenceId || source.id || '',
+          title: source.title,
+          url: source.url,
+          snippet: source.snippet || source.summary || source.description || '',
+        }));
+      if (!searchHits.length) {
+        searchHits = hasSearchKey()
+          ? await searchMany([`${meta.industry} ${dayPlan.topic || ch.title}`], {
+              count: 6,
+              maxQueries: 1,
+            })
+          : [];
+      }
+      if (!searchHits.length) {
+        searchHits = await fetchWikipediaResources(dayPlan.topic || ch.title, 2);
+      }
+      const evidenceBindings = buildLessonEvidenceBindings(searchHits);
       let written = await writeDailyLessonMarkdown(meta, ch, dayPlan, lesson, searchHits, {
         strict: preferStrict,
       });
@@ -3449,7 +4532,10 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
       if (isShallowHubMarkdown(written.markdown, ch, shallowOpts)) {
         written = {
           slug: ch.slug,
-          markdown: richFallbackFromLesson(meta, ch, dayPlan, lesson),
+          markdown: ensureLessonEvidenceBacklinks(
+            richFallbackFromLesson(meta, ch, dayPlan, lesson, evidenceBindings),
+            evidenceBindings
+          ),
         };
       }
       // 兜底仍浅则打标，供质量门禁定点重试
@@ -3460,14 +4546,23 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
     } catch (e) {
       rethrowAbort(e);
       console.warn('[PackGenerator] daily hub failed Day', dayPlan.day, e);
+      const fallbackEvidence = buildLessonEvidenceBindings(
+        await fetchWikipediaResources(dayPlan.topic || ch.title, 2)
+      );
       try {
         const lesson = await designDailyLesson(meta, dayPlan);
-        map.set(ch.slug, richFallbackFromLesson(meta, ch, dayPlan, lesson));
+        map.set(
+          ch.slug,
+          ensureLessonEvidenceBacklinks(
+            richFallbackFromLesson(meta, ch, dayPlan, lesson, fallbackEvidence),
+            fallbackEvidence
+          )
+        );
       } catch (fallbackError) {
         rethrowAbort(fallbackError);
         map.set(
           ch.slug,
-          richFallbackFromLesson(meta, ch, dayPlan, {
+          ensureLessonEvidenceBacklinks(richFallbackFromLesson(meta, ch, dayPlan, {
             objective: `能说明「${dayPlan.topic}」的适用边界并完成 1 次岗位判断`,
             concepts: [
               {
@@ -3488,8 +4583,12 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
             misconceptions: [`把「${dayPlan.topic}」当成口号而不是可检查动作`],
             retrieval: [`用一句话定义「${dayPlan.topic}」`, `举一个该用/不该用场景`],
             checklist: [`复述「${dayPlan.topic}」边界`, '完成例题步骤'],
-          })
+          }, fallbackEvidence), fallbackEvidence)
         );
+      }
+      const fallbackMarkdown = String(map.get(ch.slug) || '');
+      if (isShallowHubMarkdown(fallbackMarkdown, ch, { day: dayPlan.day, plan })) {
+        map.set(ch.slug, `${fallbackMarkdown}\n\n<!-- zhijing:shallow -->\n`);
       }
     }
     return map;
@@ -3561,11 +4660,20 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
 
   async function normalizeDayMaterialRow(row, dayPlan, meta, searchHits = []) {
     const day = Number(row?.day) || dayPlan.day;
+    const snippetByUrl = new Map(
+      (Array.isArray(searchHits) ? searchHits : []).map((hit) => [
+        String(hit?.url || '').trim(),
+        String(hit?.snippet || hit?.summary || hit?.description || '').trim().slice(0, 320),
+      ])
+    );
     let resources = Array.isArray(row?.resources) ? row.resources : [];
     resources = resources
       .map((r) => ({
         title: String(r.title || '').trim().slice(0, 80),
         url: String(r.url || '').trim(),
+        snippet: String(
+          r.snippet || r.summary || r.description || snippetByUrl.get(String(r.url || '').trim()) || ''
+        ).trim().slice(0, 320),
         type: ALLOWED_RESOURCE_TYPES.has(String(r.type)) ? String(r.type) : 'article',
       }))
       .filter(
@@ -3622,13 +4730,17 @@ ${checks || `- [ ] 复述本日 objective\n- [ ] 走完例题步骤`}
       exercises = buildVariedFallbackExercises(dayPlan, meta);
     }
 
-    // 资料充足时优先保留非软降权域名
-    if (resources.length >= 3) {
-      const preferred = resources.filter((r) => !isLowQualityLearningHost(r.url));
-      if (preferred.length >= 2) resources = preferred.slice(0, 4);
-    }
+    resources = selectSourcePortfolio(resources, {
+      learnWhat: dayPlan.topic || '',
+      topic: dayPlan.topic || '',
+      limit: 3,
+    });
 
-    return { day, resources, exercises };
+    return {
+      day,
+      resources: bindResourceEvidence(resources),
+      exercises: normalizeDailyExerciseContract(exercises, dayPlan, meta),
+    };
   }
 
   // ─── ⑤ 每日资料/练习：资源意图 → 外链策展 → 提取练习 ───
@@ -3656,107 +4768,105 @@ ${JSON.stringify(slim)}
 - query 必须带「教程/方法/讲解/定义/文档」之一；禁止只用公司名+热点词裸搜
 - prefer 禁止 news；学习资料不要指向资讯站
 - 禁止空泛「入门教程」意图`;
-    return chatJson({ system, user, max_tokens: 3200 });
+    return chatJson({ system, user, max_tokens: 3200, stage: 'materials.intents' });
   }
 
   /**
-   * 按意图联网搜索，再让模型只从 search_results 里挑链接
+   * 复用持久化的周候选池按日分配；只有质量底线确有缺口时才为该日补搜一次。
    * @returns {{ rows: Array, searchByDay: Map<number, Array> }}
    */
-  async function curateDayResourceLinks(meta, planSlice, intents, onProgress) {
+  async function curateDayResourceLinks(pack, meta, planSlice, onProgress) {
     const searchByDay = new Map();
-    const dayMeta = new Map();
-    const dayJobs = (planSlice || []).map((dayPlan) => {
-      const day = dayPlan.day;
-      const intentRow = (intents || []).find((x) => Number(x.day) === day);
-      const intentList = intentRow?.intents || [];
-      const learnWhat = intentList.map((it) => it.learnWhat || '').filter(Boolean).join('；');
-      const queries = [];
-      intentList.slice(0, 3).forEach((it) => {
-        expandLearningQueries(it.query || it.learnWhat || dayPlan.topic, {
-          prefer: it.prefer || '',
-          learnWhat: it.learnWhat || '',
-          topic: dayPlan.topic || '',
-        }).forEach((q) => queries.push(q));
-      });
-      if (!queries.length) {
-        expandLearningQueries(`${meta.industry} ${dayPlan.topic || ''}`, {
-          topic: dayPlan.topic || '',
-        }).forEach((q) => queries.push(q));
-      }
-      dayMeta.set(day, { learnWhat, topic: dayPlan.topic || '', intents: intentList });
-      return { dayPlan, day, queries: queries.slice(0, 6), learnWhat };
-    });
-
-    const dayHits = await mapPool(
-      dayJobs,
-      SEARCH_CONCURRENCY,
-      async ({ dayPlan, day, queries, learnWhat }) => {
-        const raw = await searchMany(queries, { count: SEARCH_COUNT, maxQueries: 4 });
-        const hits = rankAndFilterSearchHits(raw, {
-          learnWhat,
-          topic: dayPlan.topic || '',
-        }).slice(0, 12);
-        return { day, topic: dayPlan.topic, hits };
-      },
-      (done, total) => {
-        if (onProgress) onProgress(`⑤ 联网搜索 ${done}/${total} 天…`);
-      }
-    );
-
-    const allForPrompt = [];
-    dayHits.forEach(({ day, topic, hits }) => {
-      searchByDay.set(day, hits || []);
-      allForPrompt.push({ day, topic, search_results: (hits || []).slice(0, 10) });
-    });
-
-    const hasAny = allForPrompt.some((d) => d.search_results?.length);
-    if (!hasAny) {
-      const rows = planSlice.map((d) => ({ day: d.day, resources: [], _hits: [] }));
-      return { rows, searchByDay };
+    const fullPlan = Array.isArray(pack?.plan) && pack.plan.length ? pack.plan : planSlice;
+    const weeks = [...new Set((planSlice || []).map((row) => weekNumberForDay(row.day)))];
+    const pools = new Map();
+    for (const week of weeks) {
+      const weekPlan = fullPlan.filter((row) => weekNumberForDay(row.day) === week);
+      const pool = await ensureWeeklyResourcePool(pack, meta, weekPlan);
+      pools.set(week, pool);
+      if (onProgress) onProgress(`⑤ 已建立第 ${week} 周资料池…`);
     }
 
-    const system = `你是高信任学习资料策展人（FACTS_ONLY）。
-硬性规则：只输出一个 JSON 数组。
-1) resources[].url 必须精确复制自对应 day 的 search_results，禁止编造或改写 URL。
-2) resources[].title 必须精确复制该 url 在 search_results 中的原 title，禁止改写成「教程/步骤」美化标题。
-3) 只选能支撑「学方法/概念」的结果；不要选新闻、行情、汽车导购、社会热点。
-4) 若某天 search_results 都不合适，该天 resources 输出 []。`;
-    const user = `## Audience
-${meta.industry} / ${meta.role}
-
-## 意图（学什么）
-${JSON.stringify(intents).slice(0, 2500)}
-
-## 按日 search_results（唯一合法链接与标题来源）
-${JSON.stringify(allForPrompt).slice(0, 12000)}
-
-## Task
-[{"day":1,"resources":[{"title":"必须=search_results原标题","url":"必须来自该日 search_results","type":"article|video|report|tool"}]}]
-要求：每天尽量 2-3 条可直接打开的具体页面；宁缺毋滥；优先百科/官方/视频教程/高质量文档。`;
-    const curated = await chatJson({ system, user, temperature: 0.15, max_tokens: 4000 });
-    let rows = Array.isArray(curated) ? curated : curated.days || curated.items || [];
-
-    rows = planSlice.map((d) => {
-      const row = rows.find((r) => Number(r.day) === d.day) || { day: d.day, resources: [] };
-      const hits = searchByDay.get(d.day) || [];
-      const metaDay = dayMeta.get(d.day) || {};
-      let resources = filterResourcesToSearch(row.resources || [], hits, 'article', {
-        learnWhat: metaDay.learnWhat || '',
-        topic: metaDay.topic || d.topic || '',
+    const rows = [];
+    for (const dayPlan of planSlice || []) {
+      const day = Number(dayPlan.day);
+      const pool = pools.get(weekNumberForDay(day));
+      let poolHits = Array.isArray(pool?.hits) ? pool.hits : [];
+      const assignedIds = new Set(pool?.assignments?.[String(day)] || []);
+      let selected = assignedIds.size
+        ? poolHits.filter((hit) => assignedIds.has(String(hit.candidateId)))
+        : selectSourcePortfolio(poolHits, {
+            learnWhat: dayPlan.topic || '',
+            topic: dayPlan.topic || '',
+            limit: 3,
+          });
+      selected = selectSourcePortfolio(selected, {
+        learnWhat: dayPlan.topic || '',
+        topic: dayPlan.topic || '',
+        limit: 3,
       });
-      if (resources.length < 2) {
-        const filler = pickConcreteFromHits(hits, {
-          learnWhat: metaDay.learnWhat || '',
-          topic: metaDay.topic || d.topic || '',
-          need: 3 - resources.length,
-          excludeUrls: resources.map((r) => r.url),
+      const hasTrusted = selected.some((hit) =>
+        ['high', 'medium'].includes(normalizeSourceTier(hit.sourceTier))
+      );
+      if (assignedIds.size && (selected.length < 2 || !hasTrusted)) {
+        selected = selectSourcePortfolio(poolHits, {
+          learnWhat: dayPlan.topic || '',
+          topic: dayPlan.topic || '',
+          limit: 3,
         });
-        resources = resources.concat(filler).slice(0, 4);
       }
-      return { day: d.day, resources, _hits: hits };
-    });
-
+      const locallyTrusted = selected.some((hit) =>
+        ['high', 'medium'].includes(normalizeSourceTier(hit.sourceTier))
+      );
+      if ((selected.length < 2 || !locallyTrusted) && !pool?.targetedDays?.[String(day)]) {
+        pool.targetedDays = { ...(pool.targetedDays || {}), [String(day)]: true };
+        const stats = retrievalStatsForPack(pack);
+        stats.targetedSearchCalls += 1;
+        stats.deepseekSearchCalls += 1;
+        const descriptor = buildLearningQueryLanes(
+          `${meta.industry || ''} ${meta.role || ''} ${dayPlan.topic || ''} 教程 方法`,
+          { topic: dayPlan.topic || '', learnWhat: dayPlan.topic || '' }
+        )[0];
+        let supplemental = await searchMany([descriptor], { count: SEARCH_COUNT, maxQueries: 1 });
+        if (
+          supplemental.length < 2 ||
+          !supplemental.some((hit) => normalizeSourceTier(hit.sourceTier) === 'high')
+        ) {
+          supplemental = [
+            ...supplemental,
+            ...(await fetchWikipediaResources(dayPlan.topic || '', 2)),
+          ];
+        }
+        const metadata = await resolveResourceMetadata(
+          supplemental.slice(0, 10).map((row) => row.url)
+        );
+        stats.metadataCalls += 1;
+        supplemental = mergeResolvedMetadata(
+          rankAndFilterSearchHits(supplemental, {
+            learnWhat: dayPlan.topic || '',
+            topic: dayPlan.topic || '',
+          }),
+          metadata.results
+        );
+        const merged = rankAndFilterSearchHits([...poolHits, ...supplemental], {
+          learnWhat: dayPlan.topic || '',
+          topic: dayPlan.topic || '',
+        }).slice(0, 20);
+        merged.forEach((hit, index) => {
+          hit.candidateId = `C${index + 1}`;
+        });
+        pool.hits = merged;
+        poolHits = merged;
+        selected = selectSourcePortfolio([...selected, ...supplemental], {
+          learnWhat: dayPlan.topic || '',
+          topic: dayPlan.topic || '',
+          limit: 3,
+        });
+      }
+      const resources = bindResourceEvidence(selected);
+      searchByDay.set(day, poolHits);
+      rows.push({ day, resources, _hits: poolHits });
+    }
     return { rows, searchByDay };
   }
 
@@ -3787,19 +4897,26 @@ ${JSON.stringify(
 ${JSON.stringify(resourcesRows).slice(0, 2200)}
 
 ## Task
-[{"day":1,"exercises":[{"q":"","rubric":["",""],"ref":"可选提示"}]}]
-每天恰好 3 题，建议结构（内容必须换新，不可套下面例句）：
-1) 闭卷提取：定义/差异/步骤中的一种，须含本日特有对象
-2) 产出对齐：对照当日某条 task，问可检查结果（清单/字段/开场白/提纲等，每天换一种）
-3) 场景取舍：冲突双方每天换人（开发/设计/运营/数据/老板…），问${meta.role}怎么做
+[{"day":1,"exercises":[{"type":"recall|application|transfer","objective":"当日 topic","q":"","rubric":["",""],"ref":"可核对的参考答案","commonMistakes":["常见错误1"],"feedbackMode":"immediate|rubric|delayed-self-explain"}]}]
+每天恰好 3 题，顺序和 type 固定：
+1) recall：闭卷提取定义/差异/步骤中的一种，须含本日特有对象；feedbackMode=immediate
+2) application：对照当日某条 task，问可检查结果（清单/字段/开场白/提纲等，每天换一种）；feedbackMode=rubric
+3) transfer：换角色、约束或行业情境，要求迁移原则并说明调整；feedbackMode=delayed-self-explain
+每题都必须有 objective、ref、rubric、commonMistakes、feedbackMode；ref 是参考答案，不是「自行思考」式提示。
 严禁题干出现或等价于：
 - 「用一句话总结今天/核心认知」
 - 「合上资料，用工作语言定义「主题」」
 - 「同事主张立刻扩大「主题」范围」
 - 「一个该做、一个不该做的边界例子」
 - 「举1个真实案例说明…在产品实践中的体现」「反思今日任务」
-rubric 2-3 条可打分。`;
-    return chatJson({ system, user, temperature: strict ? 0.35 : 0.4, max_tokens: 4200 });
+rubric 2-3 条可打分；commonMistakes 1-3 条。`;
+    return chatJson({
+      system,
+      user,
+      temperature: strict ? 0.35 : 0.4,
+      max_tokens: 4200,
+      stage: strict ? 'materials.exercises-strict' : 'materials.exercises',
+    });
   }
 
   function exerciseRowsLookHomogeneous(exerciseRows) {
@@ -3811,21 +4928,29 @@ rubric 2-3 条可打分。`;
     return isHomogeneousExerciseSet(byDay);
   }
 
-  async function generateDayMaterialsChunk(meta, planSlice, onProgress) {
+  async function generateDayMaterialsChunk(pack, meta, planSlice, onProgress) {
     try {
-      const intentsRaw = await planDayResourceIntents(meta, planSlice);
-      const intents = Array.isArray(intentsRaw)
-        ? intentsRaw
-        : intentsRaw?.days || intentsRaw?.items || intentsRaw?.intents || [];
       let resourceRows = [];
       let searchByDay = new Map();
       try {
-        const curated = await curateDayResourceLinks(meta, planSlice, intents, onProgress);
+        const curated = await curateDayResourceLinks(pack, meta, planSlice, onProgress);
         resourceRows = curated.rows || [];
         searchByDay = curated.searchByDay || new Map();
       } catch (e) {
         rethrowAbort(e);
         console.warn('[PackGenerator] resource curate failed', e);
+      }
+      if (typeof TaskResourceBinder !== 'undefined' && TaskResourceBinder.bindDay) {
+        planSlice.forEach((dayPlan) => {
+          const row = resourceRows.find((item) => Number(item.day) === Number(dayPlan.day));
+          Object.assign(
+            dayPlan,
+            TaskResourceBinder.bindDay({
+              dayPlan,
+              resources: row?.resources || [],
+            })
+          );
+        });
       }
       let exerciseRows = [];
       try {
@@ -3924,9 +5049,33 @@ rubric 2-3 条可打分。`;
     const dayStart = Math.max(1, Number(rangeOpts.dayStart) || 1);
     const dayEnd = Math.max(dayStart, Number(rangeOpts.dayEnd) || Infinity);
     const merge = rangeOpts.merge === true;
+    const restrictKinds =
+      Array.isArray(rangeOpts.resourceDays) || Array.isArray(rangeOpts.exerciseDays);
+    const resourceDays = new Set((rangeOpts.resourceDays || []).map(Number));
+    const exerciseDays = new Set((rangeOpts.exerciseDays || []).map(Number));
     const plan = (pack.plan || []).filter((d) => d.day >= dayStart && d.day <= dayEnd);
     const dayResources = merge ? { ...(pack.dayResources || {}) } : {};
     const dayExercises = merge ? { ...(pack.dayExercises || {}) } : {};
+    const applyRows = (slice, rows) => {
+      const byDay = new Map((rows || []).map((row) => [Number(row.day), row]));
+      slice.forEach((dayPlan) => {
+        const normalized = byDay.get(dayPlan.day) || {
+          day: dayPlan.day,
+          resources: [],
+          exercises: fallbackDayExercises(dayPlan, meta),
+        };
+        if (!restrictKinds || resourceDays.has(Number(normalized.day))) {
+          dayResources[String(normalized.day)] = { resources: normalized.resources || [] };
+        }
+        if (!restrictKinds || exerciseDays.has(Number(normalized.day))) {
+          dayExercises[String(normalized.day)] =
+            normalized.exercises || fallbackDayExercises(dayPlan, meta);
+        }
+      });
+      pack.dayResources = dayResources;
+      pack.dayExercises = dayExercises;
+      pack.updatedAt = new Date().toISOString();
+    };
     const chunkSize = 7;
     const slices = [];
     for (let i = 0; i < plan.length; i += chunkSize) {
@@ -3944,7 +5093,14 @@ rubric 2-3 条可打分。`;
       slices,
       Math.min(2, LLM_CONCURRENCY),
       async (slice) => {
-        const rows = await generateDayMaterialsChunk(meta, slice, null);
+        const rows = await generateDayMaterialsChunk(pack, meta, slice, null);
+        applyRows(slice, rows);
+        if (typeof rangeOpts.onCheckpoint === 'function') {
+          await rangeOpts.onCheckpoint(pack, {
+            kind: 'materials',
+            days: slice.map((item) => Number(item.day)).filter(Boolean),
+          });
+        }
         return { slice, rows };
       },
       (done, total) => {
@@ -3955,19 +5111,7 @@ rubric 2-3 条可打分。`;
       }
     );
 
-    chunkRows.forEach(({ slice, rows }) => {
-      const byDay = new Map((rows || []).map((r) => [Number(r.day), r]));
-      slice.forEach((dayPlan) => {
-        const normalized = byDay.get(dayPlan.day) || {
-          day: dayPlan.day,
-          resources: [],
-          exercises: fallbackDayExercises(dayPlan, meta),
-        };
-        dayResources[String(normalized.day)] = { resources: normalized.resources || [] };
-        dayExercises[String(normalized.day)] =
-          normalized.exercises || fallbackDayExercises(dayPlan, meta);
-      });
-    });
+    chunkRows.forEach(({ slice, rows }) => applyRows(slice, rows));
 
     pack.dayResources = dayResources;
     pack.dayExercises = dayExercises;
@@ -4015,7 +5159,9 @@ rubric 2-3 条可打分。`;
     const mergeBodies = rangeOpts.mergeBodies === true;
 
     onProgress('⑥ 按课表生成「一天一章」日课导航…', progressBase);
-    const structure = await generateHubStructure(meta, outline || {}, plan);
+    const structure =
+      (mergeBodies && reusableHubStructure(pack, meta, outline || {}, plan)) ||
+      (await generateHubStructure(meta, outline || {}, plan));
     const flat = [];
     structure.modules.forEach((m) => (m.chapters || []).forEach((c) => flat.push(c)));
 
@@ -4053,6 +5199,14 @@ rubric 2-3 条可打分。`;
         chapters[ch.slug] = pendingChapterMarkdown(ch);
       }
     });
+    pack.hub = {
+      title: structure.title,
+      learningPath: structure.learningPath,
+      navigation: structureToNavigation(structure),
+      chapters,
+      generatedAt: new Date().toISOString(),
+      dailyAligned: true,
+    };
 
     /** 日章并行：每章内部仍是设计→深写串行；章与章之间限流并行 */
     onProgress(
@@ -4063,11 +5217,25 @@ rubric 2-3 条可打分。`;
       toWrite,
       LLM_CONCURRENCY,
       async (ch) => {
-        const bodies = await generateHubBodies(meta, [ch], plan);
+        const day = chapterDayNum(ch, plan);
+        const evidenceSources =
+          pack.dayResources?.[String(day)]?.resources ||
+          pack.dayResources?.[day]?.resources ||
+          [];
+        const bodies = await generateHubBodies(meta, [ch], plan, evidenceSources);
         const md = rewriteRoleLensInText(
           bodies.get(ch.slug) || stubMarkdown(meta, ch),
           meta
         );
+        chapters[ch.slug] = md;
+        pack.hub.chapters = chapters;
+        pack.updatedAt = new Date().toISOString();
+        if (typeof rangeOpts.onCheckpoint === 'function') {
+          await rangeOpts.onCheckpoint(pack, {
+            kind: 'hub',
+            days: [chapterDayNum(ch, plan)].filter(Boolean),
+          });
+        }
         return { slug: ch.slug, md };
       },
       (done, total) => {
@@ -4081,14 +5249,8 @@ rubric 2-3 条可打分。`;
       chapters[slug] = md;
     });
 
-    pack.hub = {
-      title: structure.title,
-      learningPath: structure.learningPath,
-      navigation: structureToNavigation(structure),
-      chapters,
-      generatedAt: new Date().toISOString(),
-      dailyAligned: true,
-    };
+    pack.hub.chapters = chapters;
+    pack.hub.generatedAt = new Date().toISOString();
     pack.updatedAt = new Date().toISOString();
 
     // 定点重写仍带 shallow 标记的章节（最多 5 天，控成本）
@@ -4101,7 +5263,12 @@ rubric 2-3 条可打分。`;
       await mapPool(retryList, Math.min(2, LLM_CONCURRENCY), async (slug) => {
         const ch = flat.find((c) => c.slug === slug);
         if (!ch) return;
-        const bodies = await generateHubBodies(meta, [ch], plan);
+        const day = chapterDayNum(ch, plan);
+        const evidenceSources =
+          pack.dayResources?.[String(day)]?.resources ||
+          pack.dayResources?.[day]?.resources ||
+          [];
+        const bodies = await generateHubBodies(meta, [ch], plan, evidenceSources);
         let md = rewriteRoleLensInText(bodies.get(slug) || chapters[slug], meta);
         md = String(md || '').replace(/<!--\s*zhijing:shallow\s*-->/g, '').trim();
         if (!isShallowHubMarkdown(md, ch, { day: dayPlanFromChapter(ch, plan).day, plan })) {
@@ -4134,6 +5301,182 @@ rubric 2-3 条可打分。`;
     pack.hub.chapters = pruned;
   }
 
+  function ensureWeeklyCumulativeCheckpoints(pack, outline = {}) {
+    const plan = Array.isArray(pack?.plan) ? pack.plan : [];
+    const totalWeeks = Math.ceil(plan.length / 7);
+    const existing = Array.isArray(pack.weeklyCheckpoints) ? pack.weeklyCheckpoints : [];
+    const byWeek = new Map(existing.map((item) => [Number(item.week), item]));
+    const checkpoints = [];
+    for (let week = 1; week <= totalWeeks; week++) {
+      const days = plan.filter((row) => Math.ceil(Number(row.day) / 7) === week);
+      if (!days.length) continue;
+      const previousId = week > 1 ? `weekly-checkpoint-${week - 1}` : '';
+      const theme =
+        outline?.weekThemes?.find((item) => Number(item.week) === week)?.theme ||
+        days[0]?.week ||
+        days[0]?.topic ||
+        `第 ${week} 周`;
+      const current = byWeek.get(week) || {};
+      checkpoints.push({
+        ...current,
+        id: `weekly-checkpoint-${week}`,
+        week,
+        title: String(current.title || `第 ${week} 周累计作品：${theme}`).slice(0, 100),
+        days: `${days[0].day}-${days[days.length - 1].day}`,
+        cumulative: true,
+        buildsOn: previousId,
+        objective: String(
+          current.objective ||
+            `整合本周 Day ${days[0].day}-${days[days.length - 1].day} 的判断与产出，并${week > 1 ? '迭代前周作品' : '形成首版作品'}`
+        ),
+        deliverable: String(
+          current.deliverable ||
+            `${theme}累计作品（含结论、证据、取舍记录与下一步）`
+        ),
+        rubric:
+          Array.isArray(current.rubric) && current.rubric.length
+            ? current.rubric.map(String)
+            : ['承接本周每日产出', '结论能回链证据', '记录至少一个取舍', '明确下一周迭代点'],
+        checkpoint: {
+          ...(current.checkpoint || {}),
+          evidenceRequired: true,
+          reviewMode: current.checkpoint?.reviewMode || 'self-and-rubric',
+        },
+      });
+    }
+    pack.weeklyCheckpoints = checkpoints;
+    const otherPortfolio = (pack.portfolio || []).filter(
+      (item) => !String(item?.id || '').startsWith('weekly-checkpoint-')
+    );
+    const weeklyPortfolio = checkpoints.map((item) => ({
+      id: item.id,
+      title: item.title,
+      phase:
+        plan.find((row) => Number(row.day) === Number(item.days.split('-')[0]))?.phase || '',
+      days: item.days,
+      kind: 'weekly-checkpoint',
+      cumulative: true,
+      buildsOn: item.buildsOn,
+      items: [
+        item.deliverable,
+        `按 ${item.rubric.join('；')} 完成 checkpoint`,
+        item.buildsOn ? `说明相对 ${item.buildsOn} 的具体改动` : '保存首版基线',
+      ],
+    }));
+    pack.portfolio = [...otherPortfolio, ...weeklyPortfolio];
+    return checkpoints;
+  }
+
+  function getPackQualityContract() {
+    if (typeof PackQualityContract !== 'undefined' && PackQualityContract) {
+      return PackQualityContract;
+    }
+    return globalThis?.PackQualityContract || null;
+  }
+
+  function evaluateOptionalQualityContract(pack, quality) {
+    const contract = getPackQualityContract();
+    if (!contract) return { available: false, passed: true, findings: [] };
+    try {
+      const packEvaluator =
+        (typeof contract === 'function' && contract) ||
+        (typeof contract.evaluatePack === 'function' && contract.evaluatePack) ||
+        (typeof contract.evaluate === 'function' && contract.evaluate) ||
+        (typeof contract.check === 'function' && contract.check) ||
+        (typeof contract.inspect === 'function' && contract.inspect) ||
+        (typeof contract.validatePack === 'function' && contract.validatePack);
+      const qualityEvaluator =
+        !packEvaluator &&
+        typeof contract.findingsFromQuality === 'function' &&
+        contract.findingsFromQuality;
+      if (!packEvaluator && !qualityEvaluator) {
+        return { available: true, passed: true, findings: [] };
+      }
+      const result = packEvaluator
+        ? packEvaluator.call(contract, pack, quality) || {}
+        : { findings: qualityEvaluator.call(contract, quality) || [] };
+      const rawFindings = Array.isArray(result)
+        ? result
+        : result.findings || result.errors || result.issues || [];
+      return {
+        available: true,
+        passed:
+          result.passed !== false &&
+          result.ok !== false &&
+          result.valid !== false &&
+          (!Array.isArray(result.errors) || result.errors.length === 0),
+        findings: (Array.isArray(rawFindings) ? rawFindings : [rawFindings]).filter(Boolean),
+      };
+    } catch (error) {
+      console.warn('[PackGenerator] PackQualityContract fallback', error);
+      return { available: true, passed: true, findings: [] };
+    }
+  }
+
+  function exerciseAlignsWithDay(exercise, dayPlan) {
+    const objective = String(exercise?.objective || '').trim();
+    if (objective && objective === String(dayPlan?.topic || '').trim()) return true;
+    const text = `${exercise?.q || ''} ${objective}`;
+    const anchors = [dayPlan?.topic, ...(dayPlan?.tasks || [])]
+      .flatMap((item) => tokenizeIntent(item))
+      .filter((item) => item.length >= 2);
+    return anchors.some((anchor) => text.includes(anchor));
+  }
+
+  function citationBacklinkMissingSlugs(pack) {
+    const chapters = pack?.hub?.chapters || {};
+    const plan = pack?.plan || [];
+    return Object.entries(chapters)
+      .filter(([slug, markdown]) => {
+        const md = String(markdown || '');
+        if (/本章正在后台准备中/.test(md)) return false;
+        const day = dayNumberFromChapter({ slug }, plan);
+        return !day || !hasSourceBoundHub(pack, day, day);
+      })
+      .map(([slug]) => slug);
+  }
+
+  function enrichV2LessonMetadata(pack) {
+    const plan = Array.isArray(pack?.plan) ? pack.plan : [];
+    const now = new Date().toISOString();
+    pack.schemaVersion = Math.max(2, Number(pack.schemaVersion) || 0);
+    pack.contentUpdatedAt = pack.contentUpdatedAt || now;
+    pack.generation = {
+      ...(pack.generation || {}),
+      provenance: {
+        ...(pack.generation?.provenance || {}),
+        generator: pack.generation?.provenance?.generator || 'PackGenerator',
+        model: pack.generation?.provenance?.model || 'runtime-configured-model',
+        promptVersion: pack.generation?.provenance?.promptVersion || 'pack-v2',
+        traceId:
+          pack.generation?.provenance?.traceId ||
+          (typeof PackHarness !== 'undefined' ? PackHarness.getSession?.()?.id : '') ||
+          '',
+        generatedAt: pack.generation?.provenance?.generatedAt || now,
+      },
+    };
+    pack.plan = plan.map((dayPlan, index) => {
+      const day = Number(dayPlan.day) || index + 1;
+      const resources = pack.dayResources?.[String(day)]?.resources || [];
+      const citations = resources
+        .map((source) => source?.sourceId || source?.evidenceId || source?.evidence?.id)
+        .map(String)
+        .filter(Boolean);
+      const previous = plan[index - 1];
+      return {
+        ...dayPlan,
+        objective: String(dayPlan.objective || dayPlan.topic || '').trim(),
+        prerequisites: Array.isArray(dayPlan.prerequisites)
+          ? dayPlan.prerequisites.map(String).filter(Boolean)
+          : previous?.topic
+            ? [String(previous.topic)]
+            : [],
+        estimatedMinutes: Math.max(15, Number(dayPlan.estimatedMinutes) || 45),
+        citations,
+      };
+    });
+  }
+
   function runPackQualityGate(pack, outline, opts = {}) {
     if (!pack) return pack;
     pruneHubChaptersToNavigation(pack);
@@ -4148,6 +5491,7 @@ rubric 2-3 条可打分。`;
       plan = applyPhaseFromOutline(plan, o);
     }
     pack.plan = injectHubBacklinkTasks(plan);
+    ensureWeeklyCumulativeCheckpoints(pack, o);
 
     const dayExercises = { ...(pack.dayExercises || {}) };
     const gateMeta = {
@@ -4157,7 +5501,11 @@ rubric 2-3 条可打分。`;
     };
     let wasHomogeneous = isHomogeneousExerciseSet(dayExercises);
     const usedStems = {};
-    Object.keys(dayExercises)
+    const exerciseDays = new Set([
+      ...Object.keys(dayExercises),
+      ...(pack.plan || []).map((row) => String(row.day)),
+    ]);
+    [...exerciseDays]
       .sort((a, b) => Number(a) - Number(b))
       .forEach((k) => {
         const dayPlan = (pack.plan || []).find((d) => String(d.day) === String(k)) || {
@@ -4176,7 +5524,7 @@ rubric 2-3 条可打分。`;
             if (fp.length >= 8) usedStems[fp] = (usedStems[fp] || 0) + 1;
           });
         }
-        dayExercises[k] = exs;
+        dayExercises[k] = normalizeDailyExerciseContract(exs, dayPlan, gateMeta);
       });
     const soft = softQualityThresholds();
     const uniqNow = stemUniqueRatio(dayExercises);
@@ -4205,9 +5553,14 @@ rubric 2-3 条可打分。`;
         const preferred = resources.filter((r) => !isLowQualityLearningHost(r.url));
         if (preferred.length >= 2) resources = preferred;
       }
-      dayResources[k] = { resources: resources.slice(0, 4) };
+      dayResources[k] = { resources: bindResourceEvidence(resources.slice(0, 4)) };
     });
     pack.dayResources = dayResources;
+    if (typeof TaskResourceBinder !== 'undefined' && TaskResourceBinder.bindPack) {
+      TaskResourceBinder.bindPack(pack);
+    }
+    normalizePackLessonSourceSections(pack);
+    enrichV2LessonMetadata(pack);
 
     const bloomIssues = diagnoseBloomRegression(pack.plan || [], pack.dayExercises);
     const planRef = pack.plan || [];
@@ -4238,6 +5591,44 @@ rubric 2-3 条可打分。`;
       typeof PackWorkflowGate !== 'undefined' && PackWorkflowGate.phaseBackjumps
         ? PackWorkflowGate.phaseBackjumps(planRef)
         : [];
+    const emptyResourceDays = (pack.plan || [])
+      .map((row) => Number(row.day))
+      .filter((day) => {
+        const resources = pack.dayResources?.[String(day)]?.resources;
+        return !Array.isArray(resources) || resources.length === 0;
+      });
+    const missingCitationChapterSlugs = citationBacklinkMissingSlugs(pack);
+    const missingExerciseRefDays = [];
+    const exerciseObjectiveMismatchDays = [];
+    for (const dayPlan of pack.plan || []) {
+      const exercises = pack.dayExercises?.[String(dayPlan.day)] || [];
+      if (
+        exercises.length !== 3 ||
+        exercises.some(
+          (exercise, index) =>
+            exercise.type !== ['recall', 'application', 'transfer'][index] ||
+            !exercise.ref ||
+            !exercise.rubric?.length ||
+            !exercise.commonMistakes?.length ||
+            !exercise.feedbackMode
+        )
+      ) {
+        missingExerciseRefDays.push(Number(dayPlan.day));
+      }
+      if (exercises.some((exercise) => !exerciseAlignsWithDay(exercise, dayPlan))) {
+        exerciseObjectiveMismatchDays.push(Number(dayPlan.day));
+      }
+    }
+    const expectedWeeks = Math.ceil((pack.plan || []).length / 7);
+    const checkpointWeeks = new Set(
+      (pack.weeklyCheckpoints || [])
+        .filter((item) => item?.cumulative && item?.deliverable && item?.rubric?.length)
+        .map((item) => Number(item.week))
+    );
+    const missingCumulativeWeeks = Array.from(
+      { length: expectedWeeks },
+      (_, index) => index + 1
+    ).filter((week) => !checkpointWeeks.has(week));
 
     pack.meta = pack.meta || {};
     pack.meta.quality = {
@@ -4266,6 +5657,13 @@ rubric 2-3 条可打分。`;
       glossaryKinds: glossStats.kinds,
       phaseMonotonic: phaseBackjumpDays.length === 0,
       phaseBackjumpDays,
+      emptyResourceDays,
+      emptyResourceCount: emptyResourceDays.length,
+      missingCitationChapterSlugs: missingCitationChapterSlugs.slice(0, 20),
+      missingCitationChapterCount: missingCitationChapterSlugs.length,
+      missingExerciseRefDays,
+      exerciseObjectiveMismatchDays,
+      missingCumulativeWeeks,
       needsReview:
         shallowChapters.length > Math.ceil((pack.plan?.length || 30) * 0.2) ||
         thinLate.length > 3 ||
@@ -4275,8 +5673,28 @@ rubric 2-3 条可打分。`;
         !glossStats.enoughCount ||
         (pack.glossary?.length > 0 && glossStats.passRate < 0.85) ||
         glossStats.kindCount < 2 ||
-        phaseBackjumpDays.length > 0,
+        phaseBackjumpDays.length > 0 ||
+        emptyResourceDays.length > 0 ||
+        missingCitationChapterSlugs.length > 0 ||
+        missingExerciseRefDays.length > 0 ||
+        exerciseObjectiveMismatchDays.length > 0 ||
+        missingCumulativeWeeks.length > 0,
     };
+    pack.evaluation = {
+      ...(pack.evaluation || {}),
+      status: pack.meta.quality.needsReview ? 'needs-review' : 'passed',
+      evaluatedAt: pack.meta.quality.checkedAt,
+      findings: [],
+    };
+    const contractResult = evaluateOptionalQualityContract(pack, pack.meta.quality);
+    pack.meta.quality.contractAvailable = contractResult.available;
+    pack.meta.quality.contractPassed = contractResult.passed;
+    pack.meta.quality.contractFindings = contractResult.findings;
+    if (!contractResult.passed || contractResult.findings.length) {
+      pack.meta.quality.needsReview = true;
+      pack.evaluation.status = 'needs-review';
+    }
+    pack.evaluation.findings = contractResult.findings;
     if (typeof PackHarness !== 'undefined') {
       PackHarness.setRole('evaluator');
       PackHarness.findingsFromQuality(pack.meta.quality);
@@ -4350,6 +5768,7 @@ rubric 2-3 条可打分。`;
         const slugSet = new Set([
           ...(q.shallowChapterSlugs || []),
           ...(q.thinLateChapterSlugs || []),
+          ...(q.missingCitationChapterSlugs || []),
         ]);
         // 中位偏薄时再塞最短的几章
         if (q.chapterMedianOk === false && pack.hub?.chapters) {
@@ -4386,13 +5805,17 @@ rubric 2-3 条可打分。`;
               });
             });
           await mapPool(flat, Math.min(2, LLM_CONCURRENCY), async (ch) => {
-            const bodies = await generateHubBodies(meta, [ch], plan);
+            const day = dayNumberFromChapter(ch, plan);
+            const evidenceSources =
+              pack.dayResources?.[String(day)]?.resources ||
+              pack.dayResources?.[day]?.resources ||
+              [];
+            const bodies = await generateHubBodies(meta, [ch], plan, evidenceSources);
             let md = rewriteRoleLensInText(
               bodies.get(ch.slug) || pack.hub.chapters[ch.slug],
               meta
             );
             md = String(md || '').replace(/<!--\s*zhijing:shallow\s*-->/g, '').trim();
-            const day = dayNumberFromChapter(ch, plan);
             const previous = String(pack.hub.chapters[ch.slug] || '');
             const passes = md && !isShallowHubMarkdown(md, ch, { day, plan });
             const materiallyBetter = md.length >= previous.length + 600;
@@ -4404,7 +5827,9 @@ rubric 2-3 条可打分。`;
           q.homogeneousExercises ||
           (q.templateExerciseCount || 0) > 0 ||
           q.stemUniqueOk === false ||
-          (q.bloomRegressionWeeks || []).length > 0;
+          (q.bloomRegressionWeeks || []).length > 0 ||
+          (q.missingExerciseRefDays || []).length > 0 ||
+          (q.exerciseObjectiveMismatchDays || []).length > 0;
 
         if (needExerciseRepair) {
           // Bloom 回退周：优先高 Bloom 骨架重建该周练习
@@ -4496,7 +5921,14 @@ rubric 2-3 条可打分。`;
         const med = quality.chapterMedianLen || 0;
         const gloss = quality.glossaryPassCount || 0;
         const kinds = quality.glossaryKindCount || 0;
-        const progressKey = `s${shallow}|n${thin}|t${templates}|h${homo ? 1 : 0}|b${bloom}|u${stem}|m${med}|g${gloss}|k${kinds}`;
+        const evidence =
+          (quality.emptyResourceDays || []).length +
+          (quality.missingCitationChapterSlugs || []).length;
+        const exerciseContract =
+          (quality.missingExerciseRefDays || []).length +
+          (quality.exerciseObjectiveMismatchDays || []).length;
+        const cumulative = (quality.missingCumulativeWeeks || []).length;
+        const progressKey = `s${shallow}|n${thin}|t${templates}|h${homo ? 1 : 0}|b${bloom}|u${stem}|m${med}|g${gloss}|k${kinds}|e${evidence}|x${exerciseContract}|c${cumulative}`;
         const done = !PackHarness.shouldRepair(quality);
         return { done, progressKey, quality };
       },
@@ -4603,40 +6035,52 @@ rubric 2-3 条可打分。`;
       };
       pack.status = 'partial';
 
-      onProgress(`⑤ 先备 Day 1–${skeletonDays} 资料与日课…`, 14);
-      await Promise.all([
-        attachDayMaterials(
-          pack,
-          (msg, pct) => onProgress(msg || '⑤ 骨架资料…', typeof pct === 'number' ? Math.min(28, 14 + (pct - 50) * 0.2) : 18),
-          14,
-          12,
-          { dayStart: 1, dayEnd: skeletonDays, merge: false }
-        ),
-        attachHub(
-          pack,
-          outline,
-          (msg, pct) => onProgress(msg || '⑦ 骨架日课…', typeof pct === 'number' ? Math.min(32, 14 + (pct - 70) * 0.25) : 22),
-          14,
-          16,
-          { dayStart: 1, dayEnd: skeletonDays, stubOutside: true }
-        ),
-      ]);
+      onProgress(`⑤ 先锁定 Day 1–${skeletonDays} 学习来源…`, 14);
+      await attachDayMaterials(
+        pack,
+        (msg, pct) =>
+          onProgress(
+            msg || '⑤ 骨架资料…',
+            typeof pct === 'number' ? Math.min(24, 14 + (pct - 50) * 0.16) : 18
+          ),
+        14,
+        10,
+        { dayStart: 1, dayEnd: skeletonDays, merge: false }
+      );
+      throwIfAborted();
+      ContentPack.save(pack);
+      onProgress('⑥ 来源已锁定，按同一来源生成首批日课…', 24);
+      await attachHub(
+        pack,
+        outline,
+        (msg, pct) =>
+          onProgress(
+            msg || '⑦ 骨架日课…',
+            typeof pct === 'number' ? Math.min(34, 24 + (pct - 70) * 0.3) : 28
+          ),
+        24,
+        10,
+        { dayStart: 1, dayEnd: skeletonDays, stubOutside: true }
+      );
 
       // 骨架阶段不提前生成残缺术语；完整知识库完成后统一抽取并过硬门。
       pack.glossary = [];
       pack.meta.glossaryFromHub = false;
       pack.meta.glossaryHubHitRate = 0;
+      const initialReadyThroughDay = contiguousReadyThroughDay(pack, days);
       pack.meta.generation = {
         ...pack.meta.generation,
         phase: 'filling',
-        readyThroughDay: skeletonDays,
+        readyThroughDay: initialReadyThroughDay,
       };
       pack.status = 'partial';
       pack.updatedAt = new Date().toISOString();
       throwIfAborted();
       ContentPack.save(pack);
       onProgress(
-        `前 ${skeletonDays} 天已可学习，其余课表后台补全中…`,
+        initialReadyThroughDay > 0
+          ? `前 ${initialReadyThroughDay} 天已可学习，其余课表后台补全中…`
+          : '首批日课正在通过来源与练习完整性检查…',
         36
       );
       try {
@@ -4649,6 +6093,7 @@ rubric 2-3 条可打分。`;
       return await fillPackRemainder(pack, outline, m, onProgress, {
         firstChunkEnd,
         skeletonDays,
+        onDayReady: opts.onDayReady,
       });
     } catch (error) {
       sessionOutcome = isAbortError(error) ? 'cancelled' : 'failed';
@@ -4729,10 +6174,35 @@ rubric 2-3 条可打分。`;
     for (let day = dayStart; day <= dayEnd; day++) {
       const resources = pack?.dayResources?.[String(day)] || pack?.dayResources?.[day];
       const exercises = pack?.dayExercises?.[String(day)] || pack?.dayExercises?.[day];
-      const validExercises = Array.isArray(exercises)
-        ? exercises.filter((item) => String(item?.q || item?.question || '').trim()).length
-        : 0;
-      if (!resources || typeof resources !== 'object' || validExercises < 3) return false;
+      const sourceRows = Array.isArray(resources?.resources) ? resources.resources : [];
+      const validSources =
+        sourceRows.length > 0 &&
+        sourceRows.every(
+          (source) =>
+            String(source?.sourceId || source?.id || '').trim() &&
+            String(source?.title || '').trim() &&
+            isSafeHttpUrl(source?.url) &&
+            String(source?.publisher || '').trim() &&
+            String(source?.retrievedAt || '').trim() &&
+            String(source?.sourceTier || source?.trustTier || '').trim() &&
+            String(source?.sourceTier || source?.trustTier || '').toLowerCase() !== 'unknown'
+        );
+      const requiredTypes = ['recall', 'application', 'transfer'];
+      const validExercises =
+        Array.isArray(exercises) &&
+        exercises.length === requiredTypes.length &&
+        exercises.every(
+          (item, index) =>
+            String(item?.type || '') === requiredTypes[index] &&
+            String(item?.q || item?.question || '').trim() &&
+            String(item?.ref || '').trim() &&
+            Array.isArray(item?.rubric) &&
+            item.rubric.filter((value) => String(value).trim()).length >= 2 &&
+            Array.isArray(item?.commonMistakes) &&
+            item.commonMistakes.some((value) => String(value).trim()) &&
+            String(item?.feedbackMode || '').trim()
+        );
+      if (!validSources || !validExercises) return false;
     }
     return true;
   }
@@ -4744,9 +6214,286 @@ rubric 2-3 条可打分。`;
     for (let day = dayStart; day <= dayEnd; day++) {
       const item = navigation.find((entry) => dayNumberFromChapter(entry, plan) === day);
       const markdown = item?.slug ? String(chapters[item.slug] || '').trim() : '';
-      if (!markdown || /本章正在后台准备中/.test(markdown)) return false;
+      if (
+        markdown.length < 80 ||
+        /本章正在后台准备中|<!--\s*zhijing:shallow\s*-->/.test(markdown) ||
+        isShallowHubMarkdown(markdown, item, { day, plan })
+      ) {
+        return false;
+      }
     }
     return true;
+  }
+
+  function lessonBodyRequiresInlineCitation(markdown) {
+    const sourceAt = String(markdown || '').search(/##\s*(?:来源|证据来源|Sources?)/i);
+    const body = sourceAt >= 0 ? String(markdown).slice(0, sourceAt) : String(markdown || '');
+    return (
+      /20\d{2}\s*年/.test(body) ||
+      /(?:同比|环比|增长|下降|市场规模|渗透率|转化率|营收|成本)[^\n]{0,40}(?:\d+(?:\.\d+)?%|\d+(?:\.\d+)?\s*(?:万|亿|元|美元))/.test(body)
+    );
+  }
+
+  function hasSourceBoundHub(pack, dayStart, dayEnd) {
+    const navigation = (pack?.hub?.navigation || []).flatMap((module) => module?.items || []);
+    const chapters = pack?.hub?.chapters || {};
+    const plan = pack?.plan || [];
+    for (let day = dayStart; day <= dayEnd; day++) {
+      const item = navigation.find((entry) => dayNumberFromChapter(entry, plan) === day);
+      const markdown = item?.slug ? String(chapters[item.slug] || '') : '';
+      const sourceAt = markdown.search(/##\s*(?:来源|证据来源|Sources?)/i);
+      if (sourceAt < 0) return false;
+      const body = markdown.slice(0, sourceAt);
+      const sourceSection = markdown.slice(sourceAt);
+      const citedIds = [
+        ...new Set([...body.matchAll(/\[(S\d+)\]/gi)].map((match) => match[1].toUpperCase())),
+      ];
+      const resources =
+        pack?.dayResources?.[String(day)]?.resources ||
+        pack?.dayResources?.[day]?.resources ||
+        [];
+      const sourceById = new Map(
+        resources
+          .map((source) => [
+            String(source?.sourceId || source?.id || '').trim().toUpperCase(),
+            String(source?.url || '').trim(),
+          ])
+          .filter(([id, url]) => id && url)
+      );
+      const planDay = plan.find((row) => Number(row?.day) === day);
+      const lessonCitations = Array.isArray(planDay?.citations)
+        ? planDay.citations.map((id) => String(id).toUpperCase())
+        : [];
+      if (lessonBodyRequiresInlineCitation(markdown) && !citedIds.length) return false;
+      const requiredIds = [...new Set([...citedIds, ...lessonCitations])];
+      if (!requiredIds.length) return false;
+      const allBound = requiredIds.every((id) => {
+        const url = sourceById.get(id);
+        if (!url) return false;
+        return sourceSection
+          .split('\n')
+          .some(
+            (line) =>
+              line.toUpperCase().includes(`[${id.toUpperCase()}]`) &&
+              line.includes(url)
+          );
+      });
+      if (!allBound) return false;
+    }
+    return true;
+  }
+
+  function contiguousReadyThroughDay(pack, daysInput) {
+    const days = Math.min(
+      90,
+      Math.max(0, Number(daysInput) || Number(pack?.meta?.days) || pack?.plan?.length || 0)
+    );
+    let ready = 0;
+    for (let day = 1; day <= days; day++) {
+      const decision =
+        typeof PackWorkflowGate !== 'undefined' &&
+        typeof PackWorkflowGate.evaluateDay === 'function'
+          ? PackWorkflowGate.evaluateDay(pack, day)
+          : null;
+      if (decision ? !decision.passed : (
+        !hasCompleteHub(pack, day, day) ||
+        !hasSourceBoundHub(pack, day, day) ||
+        !hasCompleteDayMaterials(pack, day, day)
+      )) break;
+      ready = day;
+    }
+    return ready;
+  }
+
+  function consecutiveDayRanges(daysInput, maxDay = 90) {
+    const days = [...new Set((daysInput || []).map(Number))]
+      .filter((day) => Number.isInteger(day) && day >= 1 && day <= maxDay)
+      .sort((a, b) => a - b);
+    const ranges = [];
+    days.forEach((day) => {
+      const current = ranges[ranges.length - 1];
+      if (current && day === current.end + 1) current.end = day;
+      else ranges.push({ start: day, end: day });
+    });
+    return ranges;
+  }
+
+  const LESSON_MICRO_BATCH_SIZE = 3;
+  const DAY_TARGETED_REPAIR_ROUNDS = 2;
+
+  function lessonMicroBatchRanges(dayStart, dayEnd, batchSize = LESSON_MICRO_BATCH_SIZE) {
+    const start = Math.max(1, Number(dayStart) || 1);
+    const end = Math.max(start, Number(dayEnd) || start);
+    const size = Math.max(1, Number(batchSize) || LESSON_MICRO_BATCH_SIZE);
+    const ranges = [];
+    for (let day = start; day <= end; day += size) {
+      ranges.push({ start: day, end: Math.min(end, day + size - 1) });
+    }
+    return ranges;
+  }
+
+  function evaluateLessonDay(pack, day) {
+    if (
+      typeof PackWorkflowGate !== 'undefined' &&
+      typeof PackWorkflowGate.evaluateDay === 'function'
+    ) {
+      return PackWorkflowGate.evaluateDay(pack, day);
+    }
+    const passed =
+      hasCompleteDayMaterials(pack, day, day) &&
+      hasCompleteHub(pack, day, day) &&
+      hasSourceBoundHub(pack, day, day);
+    return {
+      day,
+      passed,
+      findings: passed
+        ? []
+        : [{ day, severity: 'hard', code: 'lesson.incomplete', target: 'lesson' }],
+    };
+  }
+
+  function dayRepairTargets(decisions = []) {
+    const resources = new Set();
+    const exercises = new Set();
+    const hub = new Set();
+    decisions
+      .filter((decision) => decision && !decision.passed)
+      .forEach((decision) => {
+        const day = Number(decision.day);
+        const findings = Array.isArray(decision.findings) ? decision.findings : [];
+        if (!findings.length) {
+          resources.add(day);
+          exercises.add(day);
+          hub.add(day);
+          return;
+        }
+        findings.forEach((finding) => {
+          const target = String(finding?.target || '');
+          const code = String(finding?.code || '');
+          if (target === 'sources' || code.startsWith('source.')) resources.add(day);
+          if (target === 'exercises' || code.startsWith('exercise.')) exercises.add(day);
+          if (
+            target === 'lesson' ||
+            target === 'citations' ||
+            target === 'plan' ||
+            code.startsWith('lesson.') ||
+            code.startsWith('citation.')
+          ) {
+            hub.add(day);
+          }
+        });
+      });
+    resources.forEach((day) => hub.add(day));
+    return {
+      resources: [...resources].sort((a, b) => a - b),
+      exercises: [...exercises].sort((a, b) => a - b),
+      hub: [...hub].sort((a, b) => a - b),
+    };
+  }
+
+  async function processLessonMicroBatches(
+    pack,
+    outline,
+    dayStart,
+    dayEnd,
+    onProgress = () => {},
+    onCheckpoint = async () => {}
+  ) {
+    const ranges = lessonMicroBatchRanges(dayStart, dayEnd);
+    pack.meta = pack.meta || {};
+    pack.meta.generation = pack.meta.generation || {};
+    pack.meta.generation.dayStates = { ...(pack.meta.generation.dayStates || {}) };
+
+    for (let batchIndex = 0; batchIndex < ranges.length; batchIndex++) {
+      throwIfAborted();
+      const range = ranges[batchIndex];
+      const batchDays = Array.from(
+        { length: range.end - range.start + 1 },
+        (_, index) => range.start + index
+      );
+      const progressStart = 52 + Math.round((batchIndex / Math.max(1, ranges.length)) * 32);
+      const progressEnd = 52 + Math.round(((batchIndex + 1) / Math.max(1, ranges.length)) * 32);
+      onProgress(
+        `生成 Day ${range.start}–${range.end}：来源 → 日课 → 当日验收…`,
+        progressStart
+      );
+
+      let decisions = batchDays.map((day) => evaluateLessonDay(pack, day));
+      for (let round = 0; round <= DAY_TARGETED_REPAIR_ROUNDS; round++) {
+        const failed = decisions.filter((decision) => !decision.passed);
+        if (!failed.length) break;
+        const targets = dayRepairTargets(failed);
+        if (!targets.resources.length && !targets.exercises.length && !targets.hub.length) break;
+
+        if (targets.resources.length || targets.exercises.length) {
+          const materialDays = [...new Set([...targets.resources, ...targets.exercises])];
+          for (const targetRange of consecutiveDayRanges(materialDays, dayEnd)) {
+            await attachDayMaterials(pack, onProgress, progressStart, 2, {
+              dayStart: targetRange.start,
+              dayEnd: targetRange.end,
+              merge: true,
+              resourceDays: targets.resources,
+              exerciseDays: targets.exercises,
+            });
+          }
+          ContentPack.save(pack);
+        }
+
+        if (targets.hub.length) {
+          for (const targetRange of consecutiveDayRanges(targets.hub, dayEnd)) {
+            await attachHub(pack, outline, onProgress, progressStart + 2, 3, {
+              dayStart: targetRange.start,
+              dayEnd: targetRange.end,
+              mergeBodies: true,
+            });
+          }
+        }
+
+        if (typeof TaskResourceBinder !== 'undefined' && TaskResourceBinder.bindPack) {
+          TaskResourceBinder.bindPack(pack);
+        }
+        normalizePackLessonSourceSections(pack);
+        enrichV2LessonMetadata(pack);
+        decisions = batchDays.map((day) => evaluateLessonDay(pack, day));
+        if (decisions.every((decision) => decision.passed)) break;
+        if (round < DAY_TARGETED_REPAIR_ROUNDS) {
+          const retryDays = decisions
+            .filter((decision) => !decision.passed)
+            .map((decision) => decision.day);
+          onProgress(
+            `定点修复 Day ${retryDays.join(', ')}（第 ${round + 1} 次）…`,
+            Math.min(progressEnd, progressStart + 4)
+          );
+        }
+      }
+
+      const checkedAt = new Date().toISOString();
+      decisions.forEach((decision) => {
+        pack.meta.generation.dayStates[String(decision.day)] = {
+          status: decision.passed ? 'frozen' : 'pending_repair',
+          checkedAt,
+          frozenAt: decision.passed ? checkedAt : '',
+          findingCodes: (decision.findings || []).map((finding) => finding.code),
+        };
+      });
+      pack.meta.generation.pendingRepairDays = Object.entries(pack.meta.generation.dayStates)
+        .filter(([, state]) => state?.status === 'pending_repair')
+        .map(([day]) => Number(day))
+        .sort((a, b) => a - b);
+      await onCheckpoint(pack, {
+        kind: 'lesson-batch',
+        days: batchDays,
+        decisions,
+      });
+      ContentPack.save(pack);
+      onProgress(
+        decisions.every((decision) => decision.passed)
+          ? `Day ${range.start}–${range.end} 已验收并冻结`
+          : `Day ${range.start}–${range.end} 已生成，问题日进入定点处理队列`,
+        progressEnd
+      );
+    }
+    return pack;
   }
 
   function hasCompleteExtras(pack) {
@@ -4778,6 +6525,38 @@ rubric 2-3 条可打分。`;
     );
     const m = { ...meta, days };
     const o = outline || outlineFromPack(pack);
+    let lastReadyThroughDay = contiguousReadyThroughDay(pack, days);
+    let lastProgressiveSaveAt = 0;
+    const progressiveCheckpoint = async (currentPack) => {
+      const nowMs = Date.now();
+      const computedReady = contiguousReadyThroughDay(currentPack, days);
+      const nextReady = computedReady;
+      const advanced = nextReady > lastReadyThroughDay;
+      const changed = nextReady !== lastReadyThroughDay;
+      if (!changed && nowMs - lastProgressiveSaveAt < 1500) return;
+      currentPack.meta = currentPack.meta || {};
+      currentPack.meta.generation = {
+        ...(currentPack.meta.generation || {}),
+        phase: 'filling',
+        readyThroughDay: nextReady,
+        lastProgressiveSaveAt: new Date(nowMs).toISOString(),
+      };
+      currentPack.status = 'partial';
+      currentPack.updatedAt = new Date(nowMs).toISOString();
+      ContentPack.save(currentPack);
+      lastProgressiveSaveAt = nowMs;
+      if (advanced) {
+        onProgress(`Day 1–${nextReady} 已可学习，其余内容继续生成…`, undefined);
+      }
+      if (changed) {
+        lastReadyThroughDay = nextReady;
+        try {
+          ctx.onDayReady?.(currentPack, nextReady);
+        } catch (error) {
+          console.warn('[PackGenerator] onDayReady', error);
+        }
+      }
+    };
     const planAlreadyComplete = hasCompletePlan(pack, days);
 
     const weekRanges = [];
@@ -4831,67 +6610,11 @@ rubric 2-3 条可打分。`;
       console.warn('[PackGenerator] bloom regression weeks', bloomIssues);
     }
 
-    // 2) 先完成全部日课与每日资料；附加内容不得与日课抢占生成阶段。
-    onProgress('⑤ 先补全全部日课与每日资料…', 52);
-    let matPct = 52;
-    let hubPct = 52;
-    const reportLessons = () => onProgress(
-      `日课优先：资料 ${Math.round(matPct)}% · 日课 ${Math.round(hubPct)}%`,
-      Math.max(matPct, hubPct)
-    );
-    const restStart = skeletonDays + 1;
-    const materialsAlreadyComplete = hasCompleteDayMaterials(pack, restStart, days);
-    const hubAlreadyComplete = hasCompleteHub(pack, restStart, days);
-
-    const materialsPromise =
-      restStart <= days && !materialsAlreadyComplete
-        ? attachDayMaterials(
-            pack,
-            (msg, pct) => {
-              if (typeof pct === 'number') {
-                matPct = 52 + ((pct - 52) / 16) * 28;
-                matPct = Math.max(52, Math.min(76, matPct));
-              }
-              reportLessons();
-            },
-            52,
-            18,
-            { dayStart: restStart, dayEnd: days, merge: true }
-          ).then(() => {
-            matPct = 76;
-            reportLessons();
-          })
-        : Promise.resolve().then(() => {
-            matPct = 76;
-            if (materialsAlreadyComplete) onProgress('⑤ 已复用现有每日资料与练习', 76);
-          });
-
-    const hubPromise =
-      restStart <= days && !hubAlreadyComplete
-        ? attachHub(
-            pack,
-            o,
-            (msg, pct) => {
-              if (typeof pct === 'number') {
-                hubPct = 52 + ((pct - 70) / 28) * 34;
-                hubPct = Math.max(52, Math.min(78, hubPct));
-              }
-              reportLessons();
-            },
-            55,
-            28,
-            { dayStart: restStart, dayEnd: days, stubOutside: false, mergeBodies: true }
-          ).then(() => {
-            hubPct = 78;
-            reportLessons();
-          })
-        : Promise.resolve().then(() => {
-            hubPct = 78;
-            if (hubAlreadyComplete) onProgress('⑦ 已复用现有日课正文', 78);
-          });
-
-    await Promise.all([materialsPromise, hubPromise]);
+    // 2) 三天微批次：每批来源先行，逐日验收，问题只在当天定点修复，通过即冻结。
+    onProgress('⑤ 按三天微批次生成并验收日课…', 52);
+    await processLessonMicroBatches(pack, o, 1, days, onProgress, progressiveCheckpoint);
     throwIfAborted();
+    await progressiveCheckpoint(pack);
     ContentPack.save(pack);
 
     // 3) 日课完整后生成 8 条核心术语，保证术语只解释已经学到的内容。
@@ -4901,13 +6624,36 @@ rubric 2-3 条可打分。`;
     } else {
       onProgress('③ 从全部日课提炼 8 条核心术语…', 80);
       try {
+        pack.meta = pack.meta || {};
+        pack.meta.generation = pack.meta.generation || {};
+        const existingAccepted = (pack.glossary || []).filter(
+          (entry) => (!entry?.sourceType || entry.sourceType === 'core') && passesGlossaryQuality(entry)
+        );
+        const draftEntries = Array.isArray(pack.meta.generation.glossaryCoreDraft)
+          ? pack.meta.generation.glossaryCoreDraft
+          : [];
         const coreGlossary = await generateGlossary(
           m,
           o,
           (msg) => onProgress(msg || '③ 核心术语…', 84),
-          pack
+          pack,
+          {
+            seedCoreEntries: [...draftEntries, ...existingAccepted],
+            seedAcceptedEntries: existingAccepted,
+            onCoreCheckpoint: async (entries) => {
+              pack.meta.generation.glossaryCoreDraft = entries;
+              pack.meta.generation.glossaryCheckpointAt = new Date().toISOString();
+              ContentPack.save(pack);
+            },
+            onCheckpoint: async (entries) => {
+              pack.glossary = mergeGlossaryEntries(pack.glossary, entries);
+              pack.meta.generation.glossaryCheckpointAt = new Date().toISOString();
+              ContentPack.save(pack);
+            },
+          }
         );
         pack.glossary = replaceCoreGlossary(pack.glossary, coreGlossary);
+        delete pack.meta.generation.glossaryCoreDraft;
       } catch (e) {
         rethrowAbort(e);
         rethrowGlossaryOperationalError(e);
@@ -4939,20 +6685,19 @@ rubric 2-3 条可打分。`;
     throwIfAborted();
     if (typeof PackHarness !== 'undefined') PackHarness.setRole('evaluator');
     runPackQualityGate(pack, o);
-    await repairPackWithHarness(pack, o, onProgress);
 
     // 生成算法只提交候选结果；只有 PackWorkflowGate 可以写入 ready。
     pack.status = 'awaiting_review';
     pack.meta.generation = {
       ...(pack.meta.generation || {}),
       phase: 'done',
-      readyThroughDay: days,
+      readyThroughDay: contiguousReadyThroughDay(pack, days),
       completedAt: new Date().toISOString(),
     };
     pack.updatedAt = new Date().toISOString();
     if (typeof PackHarness !== 'undefined') {
       const snap = PackHarness.snapshot();
-      if (snap) pack.meta.harness = snap;
+      if (snap) storeHarnessSnapshot(pack, snap);
     }
     const q = pack.meta?.quality;
     onProgress(
@@ -4974,15 +6719,23 @@ rubric 2-3 条可打分。`;
   async function continueFillForPack(packId, onProgress = () => {}, opts = {}) {
     beginJob(opts.signal);
     let sessionOutcome = 'ok';
-    if (typeof PackHarness !== 'undefined') {
-      PackHarness.beginSession({ packId });
-      PackHarness.setRole('generator');
-    }
     try {
       const pack = ContentPack.load(packId);
       if (!pack) throw new Error('找不到课表');
+      if (typeof PackHarness !== 'undefined') {
+        PackHarness.beginSession({
+          packId,
+          title: pack.meta?.title,
+          industry: pack.meta?.industry,
+          role: pack.meta?.role,
+          days: pack.meta?.days || pack.plan?.length || 30,
+        });
+        PackHarness.setRole('generator');
+      }
       throwIfAborted();
       _searchCache.clear();
+      onProgress('更新 GitHub 资料标题…', 37);
+      await refreshCachedGithubTitles(pack);
       const outline = outlineFromPack(pack);
       const m = {
         title: pack.meta?.title,
@@ -4998,7 +6751,7 @@ rubric 2-3 条可打分。`;
       pack.meta.generation = {
         ...(pack.meta.generation || {}),
         phase: 'filling',
-        readyThroughDay: pack.meta.generation?.readyThroughDay || skeletonDays,
+        readyThroughDay: contiguousReadyThroughDay(pack, m.days),
         skeletonDays,
       };
       pack.status = 'partial';
@@ -5008,6 +6761,7 @@ rubric 2-3 条可打分。`;
       return await fillPackRemainder(pack, outline, m, onProgress, {
         firstChunkEnd,
         skeletonDays,
+        onDayReady: opts.onDayReady,
       });
     } catch (error) {
       sessionOutcome = isAbortError(error) ? 'cancelled' : 'failed';
@@ -5063,8 +6817,25 @@ rubric 2-3 条可打分。`;
       focus: name,
     }));
 
-    await attachHub(pack, outline, onProgress, 40, 55);
+    const targetRanges = consecutiveDayRanges(
+      Array.isArray(opts.days) ? opts.days : [],
+      pack.meta?.days || plan.length || 90
+    );
+    if (opts.skipHub !== true) {
+      if (targetRanges.length) {
+        for (const range of targetRanges) {
+          await attachHub(pack, outline, onProgress, 40, 50, {
+            dayStart: range.start,
+            dayEnd: range.end,
+            mergeBodies: true,
+          });
+        }
+      } else {
+        await attachHub(pack, outline, onProgress, 40, 55);
+      }
+    }
 
+    if (opts.includeGlossary !== false) {
     onProgress('③ 从日课抽取并精写核心术语…', 92);
     const metaForGloss = {
       title: pack.meta?.title,
@@ -5084,15 +6855,17 @@ rubric 2-3 条可打分。`;
       console.warn('[PackGenerator] glossary regenerate failed', e);
       pack.glossary = ensureGlossary(metaForGloss, outline, pack.glossary || [], pack);
     }
+    }
     pack.meta = pack.meta || {};
-    pack.meta.glossaryFromHub = true;
-    pack.meta.glossaryHubHitRate = Number(glossaryHubHitRate(pack.glossary, pack).toFixed(3));
+    if (opts.includeGlossary !== false) {
+      pack.meta.glossaryFromHub = true;
+      pack.meta.glossaryHubHitRate = Number(glossaryHubHitRate(pack.glossary, pack).toFixed(3));
+    }
 
     runPackQualityGate(pack, outline, { rewritePhases: false });
-    await repairPackWithHarness(pack, outline, onProgress);
     if (typeof PackHarness !== 'undefined') {
       const snap = PackHarness.snapshot();
-      if (snap) pack.meta.harness = snap;
+      if (snap) storeHarnessSnapshot(pack, snap);
     }
     pack.status = 'awaiting_review';
     pack.updatedAt = new Date().toISOString();
@@ -5117,16 +6890,46 @@ rubric 2-3 条可打分。`;
   /** P3：为已有内容包补全每日外链与练习 */
   async function generateDayMaterialsForPack(packId, onProgress = () => {}, opts = {}) {
     beginJob(opts.signal);
+    let sessionOutcome = 'ok';
+    let sessionStarted = false;
+    let pack = null;
     try {
-    const pack = ContentPack.load(packId);
+    pack = ContentPack.load(packId);
     if (!pack) throw new Error('找不到内容包');
     if (!pack.plan?.length) throw new Error('内容包没有课表，无法生成每日资料');
+    if (typeof PackHarness !== 'undefined') {
+      PackHarness.beginSession({
+        packId,
+        title: pack.meta?.title,
+        industry: pack.meta?.industry,
+        role: pack.meta?.role,
+        days: pack.meta?.days || pack.plan.length || 30,
+      });
+      PackHarness.setRole('generator');
+      sessionStarted = true;
+    }
     throwIfAborted();
     _searchCache.clear();
     if (!hasSearchKey()) {
       onProgress('未检测到联网搜索（请先配置 DeepSeek 密钥）…', 3);
     }
-    await attachDayMaterials(pack, onProgress, 5, 90);
+    const targetRanges = consecutiveDayRanges(
+      Array.isArray(opts.days) ? opts.days : [],
+      pack.meta?.days || pack.plan.length || 90
+    );
+    if (targetRanges.length) {
+      for (const range of targetRanges) {
+        await attachDayMaterials(pack, onProgress, 5, 90, {
+          dayStart: range.start,
+          dayEnd: range.end,
+          merge: true,
+          resourceDays: opts.resourceDays,
+          exerciseDays: opts.exerciseDays,
+        });
+      }
+    } else {
+      await attachDayMaterials(pack, onProgress, 5, 90);
+    }
     const outline = {
       title: pack.meta?.title,
       phases: [...new Set((pack.plan || []).map((p) => p.phase).filter(Boolean))].map((name) => ({
@@ -5138,14 +6941,179 @@ rubric 2-3 条可打分。`;
       outcomes: pack.meta?.outcomes || null,
     };
     runPackQualityGate(pack, outline, { rewritePhases: false });
+    if (sessionStarted) {
+      const snap = PackHarness.snapshot();
+      if (snap) storeHarnessSnapshot(pack, snap);
+    }
     pack.status = 'awaiting_review';
     throwIfAborted();
     ContentPack.save(pack);
     onProgress('每日资料与练习已就绪', 100);
     return pack;
+    } catch (error) {
+      sessionOutcome = isAbortError(error) ? 'cancelled' : 'failed';
+      if (sessionStarted && pack) {
+        const snap = PackHarness.snapshot();
+        if (snap) {
+          storeHarnessSnapshot(pack, snap);
+          ContentPack.save(pack);
+        }
+      }
+      throw error;
     } finally {
+      if (sessionStarted && typeof PackHarness !== 'undefined') {
+        PackHarness.endSession(sessionOutcome);
+      }
       endJob();
     }
+  }
+
+  /**
+   * 首次完整生成未过最终门时自动补救一次。
+   * 先补来源/练习，再重建日课引用与核心术语，最后交回 Workflow 重新验收。
+   */
+  function repairPlanFromGate(gate = {}, quality = {}) {
+    const uniqueDays = (...groups) =>
+      [...new Set(groups.flat().map(Number))]
+        .filter((day) => Number.isInteger(day) && day > 0)
+        .sort((a, b) => a - b);
+    const sourceDays = uniqueDays(
+      gate.missingResourceDays || [],
+      gate.emptyResourceDays || [],
+      gate.invalidSourceDays || []
+    );
+    const exerciseDays = uniqueDays(
+      gate.missingExerciseDays || [],
+      gate.invalidExerciseDays || []
+    );
+    const chapterDays = (gate.missingChapterSlugs || [])
+      .map((slug) => Number(String(slug).match(/day-?(\d+)/i)?.[1]))
+      .filter(Boolean);
+    const shallowDays = (quality.shallowChapterSlugs || [])
+      .map((slug) => Number(String(slug).match(/day-?(\d+)/i)?.[1]))
+      .filter(Boolean);
+    const nonSourceHubDays = uniqueDays(
+      gate.missingHubDays || [],
+      chapterDays,
+      gate.missingCitationDays || [],
+      gate.invalidLessonDays || [],
+      gate.qualityFloorDays || [],
+      shallowDays
+    );
+    const hubDays = uniqueDays(sourceDays, nonSourceHubDays);
+    const materialsDays = uniqueDays(sourceDays, exerciseDays);
+    const needsGlossary =
+      quality.glossaryEnough === false ||
+      Number(quality.glossaryKindCount) < 2;
+    const structuralUnknown =
+      (gate.missingPlanDays || []).length > 0 ||
+      (gate.phaseBackjumpDays || []).length > 0 ||
+      (gate.missingCheckpointWeeks || []).length > 0;
+    const hasTargetedWork = materialsDays.length > 0 || hubDays.length > 0 || needsGlossary;
+    const comprehensive =
+      structuralUnknown ||
+      (!!gate.harnessNeedsRepair && shallowDays.length === 0) ||
+      (!hasTargetedWork && Array.isArray(gate.issues) && gate.issues.length > 0);
+    return {
+      sourceDays,
+      exerciseDays,
+      materialsDays,
+      hubDays,
+      nonSourceHubDays,
+      needsGlossary,
+      comprehensive,
+    };
+  }
+
+  function sourceUrlSignatureFromPack(pack, day) {
+    return (pack?.dayResources?.[String(day)]?.resources || [])
+      .map((row) => String(row?.url || '').trim())
+      .filter(Boolean)
+      .sort()
+      .join('|');
+  }
+
+  async function repairFinalGateForPack(packId, gate, onProgress = () => {}, opts = {}) {
+    let pack = ContentPack.load(packId);
+    if (!pack) throw new Error('找不到需要自动修复的课包');
+    const repairPlan = repairPlanFromGate(gate, pack.meta?.quality || {});
+    const sourceIssueCount = repairPlan.sourceDays.length;
+    const exerciseIssueCount = repairPlan.exerciseDays.length;
+    const startedAt = new Date().toISOString();
+    const previousSourceUrls = new Map(
+      repairPlan.sourceDays.map((day) => [day, sourceUrlSignatureFromPack(pack, day)])
+    );
+
+    if (repairPlan.comprehensive) {
+      // 全局结构问题不再触发整包重生成；这里只做无损、确定性的规范化。
+      onProgress('发现全局结构问题，先执行确定性整理并保留具体诊断…', 97);
+      const outline = outlineFromPack(pack);
+      runPackQualityGate(pack, outline, { rewritePhases: false });
+      ContentPack.save(pack);
+    }
+
+    if (repairPlan.materialsDays.length) {
+      onProgress(
+        repairPlan.hubDays.length > 0 ? '定点修复学习来源与每日练习…' : '定点修复每日练习…',
+        97
+      );
+      pack = await generateDayMaterialsForPack(
+        packId,
+        (message) => onProgress(message, 98),
+        {
+          ...opts,
+          days: repairPlan.materialsDays,
+          resourceDays: repairPlan.sourceDays,
+          exerciseDays: repairPlan.exerciseDays,
+        }
+      );
+      const changedSourceDays = repairPlan.sourceDays.filter(
+        (day) => previousSourceUrls.get(day) !== sourceUrlSignatureFromPack(pack, day)
+      );
+      repairPlan.hubDays = uniqueDays(repairPlan.nonSourceHubDays, changedSourceDays);
+    }
+
+    if (repairPlan.hubDays.length || repairPlan.needsGlossary) {
+      throwIfAborted();
+      onProgress(
+        repairPlan.hubDays.length ? '定点重建问题日课与引用…' : '定点重建核心术语…',
+        98
+      );
+      pack = await generateHubForPack(
+        packId,
+        (message) => onProgress(message, 99),
+        {
+          ...opts,
+          days: repairPlan.hubDays,
+          skipHub: repairPlan.hubDays.length === 0,
+          includeGlossary: repairPlan.needsGlossary,
+        }
+      );
+    }
+    pack.meta = pack.meta || {};
+    pack.meta.quality = pack.meta.quality || {};
+    pack.meta.quality.autoRepair = {
+      status: 'completed',
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      sourceIssueCount,
+      exerciseIssueCount,
+      mode: repairPlan.comprehensive ? 'deterministic-plus-targeted' : 'targeted',
+      targetedMaterialDays: repairPlan.materialsDays,
+      targetedHubDays: repairPlan.hubDays,
+      glossaryRegenerated: repairPlan.needsGlossary,
+      triggerIssues: Array.isArray(gate?.issues) ? gate.issues.slice(0, 12) : [],
+    };
+    pack.meta.generation = {
+      ...(pack.meta.generation || {}),
+      readyThroughDay: contiguousReadyThroughDay(
+        pack,
+        pack.meta?.days || pack.plan?.length || 0
+      ),
+    };
+    ContentPack.save(pack);
+    onProgress('自动修复完成，正在重新验收…', 99);
+    return pack;
   }
 
   return {
@@ -5153,17 +7121,37 @@ rubric 2-3 条可打分。`;
     continueFillForPack,
     generateHubForPack,
     generateDayMaterialsForPack,
+    repairFinalGateForPack,
+    generateCourseGlossaryForPack,
     generateGlossaryForDayPack,
     generateCustomGlossaryForPack,
+    refreshGithubTitlesForPack,
     parseJsonLoose,
     isAbortError,
     runPackQualityGate,
     repairPackWithHarness,
     _test: {
       fetchWikipediaResources,
+      buildLearningQueryLanes,
+      buildWeeklyQueryLanes,
+      weekNeedsGithub,
+      poolFingerprint,
+      ensureWeeklyResourcePool,
+      refreshCachedGithubTitles,
+      curateDayResourceLinks,
+      mergeResolvedMetadata,
+      expandLearningQueries,
+      rankAndFilterSearchHits,
+      selectSourcePortfolio,
+      filterResourcesToSearch,
+      pickConcreteFromHits,
+      scoreSearchHit,
+      sourcePlatform,
+      normalizeSourceTier,
       generateGlossary,
       glossaryCandidates,
       glossaryCandidatesForDay,
+      glossaryCandidatesForCourse,
       mergeGlossaryEntries,
       replaceCoreGlossary,
       generateExtras,
@@ -5172,8 +7160,24 @@ rubric 2-3 条可打分。`;
       hasCompletePlan,
       hasCompleteDayMaterials,
       hasCompleteHub,
+      hasSourceBoundHub,
       hasCompleteExtras,
+      contiguousReadyThroughDay,
+      consecutiveDayRanges,
+      lessonMicroBatchRanges,
+      dayRepairTargets,
+      processLessonMicroBatches,
+      repairPlanFromGate,
+      sourceUrlSignatureFromPack,
+      mergeAiMetrics,
+      storeHarnessSnapshot,
+      canonicalizeLessonSourceSection,
+      normalizeLessonEvidenceCitations,
+      normalizePackLessonSourceSections,
+      citationBacklinkMissingSlugs,
       fillPackRemainder,
+      HUB_STABLE_SYSTEM_PREFIX,
+      reusableHubStructure,
     },
   };
 })();

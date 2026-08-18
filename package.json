@@ -1,7 +1,7 @@
 {
   "name": "zhijing",
   "productName": "知径",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "description": "岗位方向学习路径 · 按天打卡",
   "author": {
     "name": "知径",
@@ -103,11 +103,12 @@
     }
   },
   "devDependencies": {
-    "electron": "^37.2.0",
+    "electron": "^43.4.0",
     "electron-builder": "^26.0.12",
     "fast-check": "^4.9.0"
   },
   "dependencies": {
     "xstate": "^5.32.5"
-  }
+  },
+  "license": "UNLICENSED"
 }

@@ -51,12 +51,18 @@ const PackHarness = (() => {
       'late_chapters_thick_enough',
       'glossary_core_quality_entries_ge_8',
       'glossary_visual_kinds_ge_2',
+      'resources_non_empty_or_explicitly_unavailable',
+      'hub_citations_backlink_to_sources',
+      'exercise_reference_answers_complete',
+      'exercise_objectives_aligned',
+      'weekly_cumulative_checkpoints_complete',
     ],
     budgets: {
       maxRepairRounds: 3,
       maxShallowRepairsPerRound: 5,
       maxExerciseRegenChunks: 2,
       maxToolCallsPerJob: 200,
+      maxMetadataCallsPerJob: 30,
       wallClockMs: 45 * 60 * 1000,
     },
     antiMetrics: {
@@ -67,9 +73,18 @@ const PackHarness = (() => {
       shallowStubAsReady: '浅文章节不得静默标 ready 且无标记',
       thinLateChapters: 'Day≥15 章节不得低于相对厚度门槛',
       bloomRegression: '周均 Bloom 不得相对上周倒退超过容差',
+      unboundEvidence: '正文事实必须通过 [Sx] 回链到可核验来源',
+      incompleteExerciseFeedback: '每日练习必须含参考答案、误区与反馈方式',
+      missingCumulativeWork: '每周必须形成承接前周的累计作品检查点',
     },
     softQuality: SOFT_QUALITY,
-    toolAllowlist: ['deepseek.chat', 'api.search', 'wikipedia.opensearch', 'contentPack.save'],
+    toolAllowlist: [
+      'deepseek.chat',
+      'api.search',
+      'api.meta.resolve',
+      'wikipedia.opensearch',
+      'contentPack.save',
+    ],
     capabilityMax: CAPABILITY.L2,
   });
 
@@ -103,11 +118,24 @@ const PackHarness = (() => {
     return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  function budgetsForDays(daysInput, overrides = {}) {
+    const days = Math.min(90, Math.max(7, Number(daysInput) || 30));
+    return {
+      ...DEFAULT_CONTRACT.budgets,
+      maxToolCallsPerJob:
+        overrides.maxToolCallsPerJob ?? Math.max(240, 140 + days * 12),
+      wallClockMs:
+        overrides.wallClockMs ?? Math.max(45 * 60 * 1000, (30 + days * 2) * 60 * 1000),
+      ...overrides,
+    };
+  }
+
   function beginSession(meta = {}, contract = {}) {
+    const budgets = budgetsForDays(meta.days, contract.budgets || {});
     const c = {
       ...DEFAULT_CONTRACT,
       ...contract,
-      budgets: { ...DEFAULT_CONTRACT.budgets, ...(contract.budgets || {}) },
+      budgets,
       antiMetrics: { ...DEFAULT_CONTRACT.antiMetrics, ...(contract.antiMetrics || {}) },
       softQuality: { ...SOFT_QUALITY, ...(contract.softQuality || {}) },
     };
@@ -123,6 +151,18 @@ const PackHarness = (() => {
       contract: c,
       spans: [],
       toolCalls: 0,
+      metadataCalls: 0,
+      aiMetrics: {
+        calls: 0,
+        failures: 0,
+        durationMs: 0,
+        retries: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+        stages: {},
+      },
       repairRound: 0,
       findings: [],
       role: 'planner', // planner | generator | evaluator
@@ -176,6 +216,7 @@ const PackHarness = (() => {
       meta: _session.meta,
       contract: _session.contract.name,
       toolCalls: _session.toolCalls,
+      aiMetrics: JSON.parse(JSON.stringify(_session.aiMetrics)),
       repairRound: _session.repairRound,
       findings: _session.findings.slice(-20),
       spans: _session.spans.slice(-80),
@@ -188,6 +229,45 @@ const PackHarness = (() => {
     if (!['planner', 'generator', 'evaluator'].includes(role)) return;
     _session.role = role;
     span('role.switch', { role });
+  }
+
+  function recordAiCall(metrics = {}) {
+    if (!_session) return;
+    const usage = metrics.usage && typeof metrics.usage === 'object' ? metrics.usage : {};
+    const stage = String(metrics.stage || 'other').slice(0, 80);
+    const values = {
+      calls: 1,
+      failures: metrics.status && metrics.status !== 'ok' ? 1 : 0,
+      durationMs: Math.max(0, Number(metrics.durationMs) || 0),
+      retries: Math.max(0, (Number(metrics.attempts) || 1) - 1),
+      promptTokens: Math.max(0, Number(usage.prompt_tokens) || 0),
+      completionTokens: Math.max(0, Number(usage.completion_tokens) || 0),
+      cacheHitTokens: Math.max(0, Number(usage.prompt_cache_hit_tokens) || 0),
+      cacheMissTokens: Math.max(0, Number(usage.prompt_cache_miss_tokens) || 0),
+    };
+    const stageMetrics = _session.aiMetrics.stages[stage] || {
+      calls: 0,
+      failures: 0,
+      durationMs: 0,
+      retries: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheHitTokens: 0,
+      cacheMissTokens: 0,
+    };
+    for (const [key, value] of Object.entries(values)) {
+      _session.aiMetrics[key] += value;
+      stageMetrics[key] += value;
+    }
+    _session.aiMetrics.stages[stage] = stageMetrics;
+    span('ai.complete', {
+      stage,
+      durationMs: values.durationMs,
+      attempts: values.retries + 1,
+      promptTokens: values.promptTokens,
+      completionTokens: values.completionTokens,
+      cacheHitTokens: values.cacheHitTokens,
+    });
   }
 
   /**
@@ -204,9 +284,18 @@ const PackHarness = (() => {
     if (_session.contract.capabilityMax < CAPABILITY.L2 && toolName === 'api.search') {
       return { ok: false, code: 'CAPABILITY', message: '当前无法使用联网搜索，请稍后重试' };
     }
-    if (_session.toolCalls >= (_session.contract.budgets.maxToolCallsPerJob || 200)) {
+    if (
+      toolName !== 'api.meta.resolve' &&
+      _session.toolCalls >= (_session.contract.budgets.maxToolCallsPerJob || 200)
+    ) {
       span('guard.deny', { toolName, reason: 'tool_budget' });
       return { ok: false, code: 'TOOL_BUDGET', message: '本次生成次数已用完，请稍后重试或点「继续补全」' };
+    }
+    if (
+      toolName === 'api.meta.resolve' &&
+      _session.metadataCalls >= (_session.contract.budgets.maxMetadataCallsPerJob || 30)
+    ) {
+      return { ok: false, code: 'META_BUDGET', message: '本次资料标题增强次数已用完' };
     }
     if (Date.now() - _session.startedAt > (_session.contract.budgets.wallClockMs || 2.7e6)) {
       return { ok: false, code: 'WALL_CLOCK', message: '本次生成时间已用完，请稍后重试或点「继续补全」' };
@@ -215,8 +304,12 @@ const PackHarness = (() => {
     if (toolName === 'contentPack.save' && payload?.inventUrls) {
       return { ok: false, code: 'ANTI_INVENT_URL', message: _session.contract.antiMetrics.inventUrlsWithoutSearch };
     }
-    _session.toolCalls += 1;
-    span('tool.allow', { toolName, n: _session.toolCalls });
+    if (toolName === 'api.meta.resolve') _session.metadataCalls += 1;
+    else _session.toolCalls += 1;
+    span('tool.allow', {
+      toolName,
+      n: toolName === 'api.meta.resolve' ? _session.metadataCalls : _session.toolCalls,
+    });
     return { ok: true };
   }
 
@@ -371,6 +464,52 @@ const PackHarness = (() => {
         message: `术语图鉴仅 ${quality.glossaryKindCount || 0} 种可视化，至少需 2 种且按概念结构选型`,
       });
     }
+    (quality.emptyResourceDays || []).forEach((day) => {
+      findings.push({
+        type: 'empty_resources',
+        target: `dayResources.${day}`,
+        message: `Day ${day} 没有可核验学习资源；保留空数组并禁止生成精确数据，后续应补充高信任来源`,
+      });
+    });
+    (quality.missingCitationChapterSlugs || []).forEach((slug) => {
+      findings.push({
+        type: 'citation_backlink_missing',
+        target: slug,
+        message: '正文缺少 [S1] 引用或「来源」段的 URL 回链',
+      });
+    });
+    (quality.missingExerciseRefDays || []).forEach((day) => {
+      findings.push({
+        type: 'exercise_reference_missing',
+        target: `dayExercises.${day}`,
+        message: '每日三题必须各自包含可用于反馈的 ref 参考答案',
+      });
+    });
+    (quality.exerciseObjectiveMismatchDays || []).forEach((day) => {
+      findings.push({
+        type: 'exercise_objective_mismatch',
+        target: `dayExercises.${day}`,
+        message: 'recall/application/transfer 三题未全部对齐当日 topic 或 task',
+      });
+    });
+    (quality.missingCumulativeWeeks || []).forEach((week) => {
+      findings.push({
+        type: 'weekly_cumulative_missing',
+        target: `weeklyCheckpoints.${week}`,
+        message: `第 ${week} 周缺少承接前周产出的累计作品/checkpoint`,
+      });
+    });
+    const contractFindings = Array.isArray(quality.contractFindings)
+      ? quality.contractFindings
+      : [];
+    contractFindings.forEach((finding, index) => {
+      const source = finding && typeof finding === 'object' ? finding : { message: finding };
+      findings.push({
+        type: String(source.type || source.code || 'quality_contract'),
+        target: String(source.target || source.path || `contract.${index + 1}`),
+        message: String(source.message || source.detail || 'PackQualityContract 未通过'),
+      });
+    });
     if (_session) {
       _session.findings = findings;
       span('evaluator.findings', { count: findings.length });
@@ -437,6 +576,16 @@ const PackHarness = (() => {
       quality.glossaryEnough === false ||
       (quality.glossaryPassRate ?? 0) < 0.85 ||
       (quality.glossaryKindCount || 0) < 2;
+    const evidenceBad =
+      (quality.emptyResourceDays || []).length > 0 ||
+      (quality.missingCitationChapterSlugs || []).length > 0;
+    const exerciseContractBad =
+      (quality.missingExerciseRefDays || []).length > 0 ||
+      (quality.exerciseObjectiveMismatchDays || []).length > 0;
+    const cumulativeBad = (quality.missingCumulativeWeeks || []).length > 0;
+    const externalContractBad =
+      quality.contractPassed === false ||
+      (quality.contractFindings || []).length > 0;
     return !!(
       shallow > 0 ||
       thinLate > 0 ||
@@ -447,6 +596,10 @@ const PackHarness = (() => {
       medianThin ||
       bloomBad ||
       glossaryBad ||
+      evidenceBad ||
+      exerciseContractBad ||
+      cumulativeBad ||
+      externalContractBad ||
       quality.phaseMonotonic === false
     );
   }
@@ -462,6 +615,7 @@ const PackHarness = (() => {
     snapshot,
     span,
     setRole,
+    recordAiCall,
     guardTool,
     assembleContext,
     exerciseFewshotBlock,
@@ -470,5 +624,6 @@ const PackHarness = (() => {
     runLoop,
     shouldRepair,
     softThresholds,
+    budgetsForDays,
   };
 })();

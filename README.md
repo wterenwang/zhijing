@@ -1,143 +1,151 @@
 <div align="center">
 
-<img src="assets/mascot/jingjing-idle.png" alt="径径" width="160" />
+<img src="assets/mascot/jingjing-idle.png" alt="知径看板娘径径" width="144" />
 
 # 知径
 
-**岗位方向，按天学懂。**
+**把“想学一个岗位”，变成每天走得动的一步。**
 
-专属学习路径 · 每日打卡 · 知识库与术语图鉴 · 智能伴学全程在侧
+按岗位生成学习路径，围绕任务、资料、练习、复盘和打卡形成每日闭环。
 
-[⬇️ 立即下载](https://github.com/wterenwang/zhijing/releases/latest) · [✨ 功能](#features) · [🚀 怎么开始](#quickstart)
+[下载最新版](https://github.com/wterenwang/zhijing/releases/latest) · [查看 v1.2.0 更新](CHANGELOG.md#120---2026-08-18) · [反馈问题](https://github.com/wterenwang/zhijing/issues)
 
-![Version](https://img.shields.io/badge/version-1.1.4-0891b2)
-![Platform](https://img.shields.io/badge/Windows%20%7C%20macOS-111827)
-![For](https://img.shields.io/badge/面向-想转岗%20%2F%20系统学岗位的人-0891b2)
+![Version](https://img.shields.io/badge/version-1.2.0-0891b2)
+![Platform](https://img.shields.io/badge/Windows_x64%20%7C%20macOS_arm64-111827)
+![License](https://img.shields.io/badge/license-All_rights_reserved-64748b)
 
 </div>
 
----
+## 为什么是知径
 
-## 💡 这是什么
+资料越多，不等于越容易学会。知径把岗位学习拆成可执行的日课，并让每一天都能回答五个问题：
 
-**知径**帮你把「想学某个岗位」变成每天能走完的一小步。
+1. 今天要完成什么任务？
+2. 应该先读哪些可信资料？
+3. 怎样确认自己真的理解了？
+4. 哪些内容需要用自己的话复述和记录？
+5. 今天是否达到可以打卡的学习底线？
 
-打开应用，径径会带你认识功能；你可以先体验内置的 **产品经理 30 天入门** 展示课表，再 **按自己的行业和岗位新建专属路径**——智能会帮你生成课表、点评练习、解读资讯，让学习不只是看资料。
+你可以先体验内置的“产品经理 30 天入门”展示路径，也可以填写行业、岗位和目标，生成自己的 30 / 60 / 90 天学习路径。
 
-适合：想系统学某一岗位、希望有人按天带着走、而不是自己在网盘里迷路的人。
+## v1.2.0 界面
 
----
+![知径 v1.2.0 今日学习页](assets/screenshots/today-v1.2.0.png)
 
-## 👀 它长什么样
+“今天”页围绕 **任务 → 资料 → 练习 → 复盘 → 打卡** 排列，学习进度和日历固定在侧栏；费曼复述与笔记改为标签页，减少页面跳转和视觉干扰。
 
-<p align="center">
-  <img src="assets/guide/guide-scene-welcome.jpg" alt="开场介绍" width="28%" />
-  &nbsp;
-  <img src="assets/guide/guide-scene-today.jpg" alt="今日打卡" width="28%" />
-  &nbsp;
-  <img src="assets/guide/guide-scene-hub.jpg" alt="知识库" width="28%" />
-</p>
+## 核心能力
 
-<p align="center"><sub>径径介绍产品 → 今天打卡 → 知识库精读</sub></p>
+- **专属岗位路径**：按行业、岗位、目标和周期生成完整学习蓝图。
+- **逐日学习闭环**：每日任务、可信资料、章节内容、三类练习、复盘与打卡相互对应。
+- **质量门禁**：统一检查来源、引用、正文厚度、练习多样性和任务—资料证据关系。
+- **断点续跑**：生成过程按微批次保存检查点，刷新、关闭或主动停止后可继续补全。
+- **检索提速**：按周建立候选资料池，多个 Day 复用同一轮检索结果，降低单 Key 等待时间。
+- **可读资源标题**：GitHub 文件和仓库优先显示 README 标题或项目描述，不再只展示机械文件名。
+- **定点修复**：只重写失败字段或问题 Day，避免因局部问题整包重生成。
+- **知识库与术语图鉴**：支持章节精读、搜索、知识图谱、术语对比和项目里程碑。
+- **复习与求职工具**：包含间隔复习、面试题、作品集看板、投递管理和资讯解读。
+- **九步使用指南**：引导已适配新的“今天”页、练习区和复盘标签页。
 
----
+完整更新内容见 [CHANGELOG.md](CHANGELOG.md)。
 
-<a id="features"></a>
+## 3 分钟开始
 
-## ✨ 你能用它做什么
+1. 打开 [Releases](https://github.com/wterenwang/zhijing/releases/latest)。
+2. 下载与你的系统匹配的安装包：
+   - Windows x64：`Zhijing-Setup-1.2.0.exe`
+   - macOS Apple Silicon：`Zhijing-1.2.0-mac-arm64.dmg` 或 `.zip`
+3. 安装并启动“知径”。
+4. 先进入展示路径体验一天，或在“我的路径”中新建自己的学习路径。
+5. 如需生成课包、AI 点评和联网资料检索，在设置中配置 DeepSeek API Key。
 
-| | | |
-|---|---|---|
-| 🗺️ | **专属学习路径** | 告诉它你的行业和岗位，生成按天课表（默认 30 天，可按目标调整） |
-| 📅 | **每天打卡** | 看今日任务、做练习、用自己的话复述，一步记下进度 |
-| 🤖 | **智能伴学** | 填入 DeepSeek 密钥即可：生成课表、练习点评、联网资讯解读；生成中可随时停止 |
-| 💾 | **生成可恢复** | 课表生成会写检查点：刷新、误关窗口或中途停止后，可接着补全，不卡在「生成中」 |
-| 📚 | **知识库优先** | 先把章节讲透，再沉淀术语；概念对齐知识库，而不是只丢一堆链接 |
-| 🔤 | **术语图鉴与复习** | 用你平时会说的话找到岗位名词；图解、易混对比、闪卡 + 间隔复习巩固 |
-| 🧩 | **练习 · 求职 · 资讯** | 需要时在「更多」里打开，不打扰每天的主线 |
-| 🐾 | **径径** | 多条路径时汇总今日待办；单路径时提醒练习、费曼与打卡 |
+### macOS 未签名提示
 
-专属课表会按质量门槛自动加厚浅章节、减少模板化练习；生成过程可后台进行，骨架就绪后可先学前几天。展示课表仅供试用，真正要学的是你自己那条路径。智能功能可选，主学习流程不强制联网。
+v1.2.0 的 macOS 构建未做 Apple 开发者签名。若系统阻止打开，请先在访达中右键应用并选择“打开”。仍提示损坏时，可执行：
 
----
+```bash
+xattr -cr "/Applications/知径.app"
+```
 
-<a id="quickstart"></a>
+当前仅提供 macOS Apple Silicon（arm64）安装包，不支持 Intel Mac。
 
-## 🚀 怎么开始（大约 3 分钟）
+## 智能功能与隐私
 
-1. 前往 [下载页](https://github.com/wterenwang/zhijing/releases/latest)，选择你的系统  
-   - **Windows（x64）**：`Zhijing-Setup-1.1.4.exe`  
-   - **Mac（Apple 芯片）**：`Zhijing-1.1.4-mac-arm64.dmg` 或 `.zip`（若本版尚未上传，请暂用上一版或等待补充）
-2. 安装后打开 **「知径」**
-3. 跟着径径走完引导 → 按提示配置 DeepSeek（可选）→ **新建路径**，开始正式学习
+智能功能是可选的。配置一个 DeepSeek API Key 后，可使用：
 
-也可以先点开「产品经理 30 天入门」体验一天长什么样，再创建自己的课表。
+- 专属课包生成与定点修复
+- 练习点评与参考答案
+- 联网资料检索和近期资讯解读
 
-> 🍎 若 Mac 提示「已损坏 / 无法打开」，在「终端」里粘贴执行：  
-> `xattr -cr "/Applications/知径.app"`  
-> 然后再打开知径。
+密钥和学习数据仅保存在本机，不会上传到知径自建服务器。联网功能会将完成任务所需的提示词发送至你配置的 DeepSeek 服务，并按资源链接访问 GitHub 等公开站点获取元数据。请勿在学习内容中粘贴密码、令牌或其他敏感信息。
 
----
+## 课包生成方式
 
-## 🧭 一天通常怎么用
+![知径课包生成流程](docs/architecture/course-pack-generation.svg)
 
-1. 打开知径，看 **今天** 要学什么  
-2. 读知识库 / 资料、做练习，试试用自己的话复述  
-3. 点打卡，把今天收尾  
-4. 遇到不懂的词或概念 → 先回看 **知识库**，再打开 **术语图鉴**（从你的说法切入，对照图解与易混点）  
-5. 想多练、看资讯或准备求职 → 打开 **更多**
+生成流程采用“全局蓝图 → 三天微批次 → 来源先行 → 逐日生成 → 质量验收 → 定点修复 → 最终门禁”。每个通过检查的 Day 会立即冻结并保存，因此已有合格内容不会因后续失败而丢失。
 
-径径会在旁边提醒你：展示课表只是样例，专属路径才是你的主线。
+## 本地开发
 
----
-
-## 🔑 智能功能（可选）
-
-在设置里填入 **DeepSeek API Key** 后即可使用：
-
-- 按行业 / 岗位 **生成专属课表**（支持中途停止与刷新后恢复；自动检查章节厚度与练习多样性）
-- 练习 **点评与参考答案**
-- **联网搜索** 后的日课资讯解读（与聊天共用同一密钥）
-
-密钥仅保存在本机，不会上传到知径服务器。
-
----
-
-## 💬 有问题？
-
-欢迎在 [Issues](https://github.com/wterenwang/zhijing/issues) 告诉我们卡在哪一步。
-
----
-
-<details>
-<summary>🛠️ 开发者：本地运行与打包</summary>
+要求：Node.js 22+、npm；网页版本地代理还需要 Python 3。
 
 ```bash
 git clone https://github.com/wterenwang/zhijing.git
 cd zhijing
-npm install
-npm start              # 桌面调试
-npm run dist           # Windows → release/Zhijing-Setup-*.exe
-npm run dist:mac       # macOS → release/Zhijing-*-mac-arm64.dmg（需 Mac 或 CI）
+npm ci
+npm run test:workflow
+npm start
 ```
 
-知识库前端（`ei-knowledge-hub`）修改后需先构建，再打包桌面端：
+常用命令：
 
 ```bash
-cd ei-knowledge-hub && npm install && npm run build && cd ..
+npm run test:workflow   # 课包工作流回归测试
+npm run pack            # 生成 unpacked 桌面应用
+npm run dist            # 构建 Windows NSIS 安装包
+npm run dist:portable   # 构建 Windows 便携版
+npm run dist:mac        # 构建 macOS arm64 DMG + ZIP（需 macOS）
+```
+
+知识库前端位于 `ei-knowledge-hub/`。修改后先重新构建，再打包桌面端：
+
+```bash
+cd ei-knowledge-hub
+npm ci
+npm run build
+cd ..
 npm run dist
 ```
 
-本地网页预览：双击 `启动本地服务.bat`，浏览器打开 `http://localhost:3000/index.html`（需本机 Python；窗口标题为 ZhiJing-AI-Proxy）。
+Windows 网页预览可运行 `启动本地服务.bat`，然后访问 `http://127.0.0.1:3000/index.html`。
 
-</details>
+## 项目结构
 
----
+```text
+.
+├─ index.html                 主应用界面与交互
+├─ js/                        课包、工作流、复习与页面逻辑
+├─ electron/                  Electron 主进程和本地服务
+├─ ai-proxy.py                网页版本地 AI / 元数据代理
+├─ ei-knowledge-hub/          React + TypeScript 知识库前端
+├─ hub/                       知识库构建产物
+├─ test/                      工作流回归测试
+├─ docs/architecture/         正式架构与流程图
+└─ .github/workflows/         跨平台发布自动化
+```
 
-<div align="center">
+## 支持与限制
 
-**把岗位能力，拆成每天走得动的一步。**
+- Windows：x64
+- macOS：Apple Silicon / arm64，未签名
+- 生成与联网能力依赖用户自己的 DeepSeek API Key、账户余额和网络环境
+- 默认展示课表用于体验产品，正式学习建议创建专属路径
+- 不提供云端账号同步；备份与恢复由应用内本地文件完成
 
-<sub>知径 · 径径陪你学</sub>
+如遇问题，请在 [Issues](https://github.com/wterenwang/zhijing/issues) 中说明系统版本、知径版本、复现步骤和错误截图。提交日志前请先移除 API Key 与个人信息。
 
-</div>
+## 授权
+
+Copyright © 知径。保留所有权利。
+
+本仓库公开仅用于查看与问题反馈，未授予复制、修改、再分发、商用或创建衍生作品的许可。除非获得权利人明确书面授权，否则不得使用本项目代码或素材。

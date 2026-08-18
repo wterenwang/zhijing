@@ -83,6 +83,7 @@
             signal,
             skeletonDays: 3,
             onSkeletonReady: (pack) => this.skeletonReady(runtime, pack),
+            onDayReady: (pack, day) => this.dayReady(runtime, pack, day),
           }
         )
       );
@@ -96,7 +97,7 @@
           projectId: project.id,
           operation: 'resume',
           packId: project.packId,
-          readyThroughDay: pack?.meta?.generation?.readyThroughDay || 3,
+          readyThroughDay: Number(pack?.meta?.generation?.readyThroughDay) || 0,
         },
         hooks,
         { type: 'RESUME', operation: 'resume' }
@@ -106,18 +107,28 @@
         this.generator.continueFillForPack(
           project.packId,
           (message, percent) => this.progress(runtime, message, percent),
-          { signal }
+          { signal, onDayReady: (pack, day) => this.dayReady(runtime, pack, day) }
         )
       );
     }
     async repairHub(project, hooks = {}) {
-      return this.runPackOperation(project, 'repair', 'REPAIR', hooks, (signal, runtime) =>
-        this.generator.generateHubForPack(
+      return this.runPackOperation(project, 'repair', 'REPAIR', hooks, (signal, runtime) => {
+        const pack = this.contentPack.load(project.packId);
+        const gate = deps.gateApi.evaluate(pack, this.harness);
+        if (typeof this.generator.repairFinalGateForPack === 'function') {
+          return this.generator.repairFinalGateForPack(
+            project.packId,
+            gate,
+            (message, percent) => this.progress(runtime, message, percent),
+            { signal }
+          );
+        }
+        return this.generator.generateHubForPack(
           project.packId,
           (message, percent) => this.progress(runtime, message, percent),
           { signal }
-        )
-      );
+        );
+      });
     }
     async generateMaterials(project, hooks = {}) {
       return this.runPackOperation(
@@ -143,6 +154,20 @@
           this.generator.generateGlossaryForDayPack(
             project.packId,
             day,
+            (message, percent) => this.progress(runtime, message, percent),
+            { signal }
+          )
+      );
+    }
+    async generateCourseGlossary(project, hooks = {}) {
+      return this.runPackOperation(
+        project,
+        'courseGlossary',
+        'GLOSSARY',
+        hooks,
+        (signal, runtime) =>
+          this.generator.generateCourseGlossaryForPack(
+            project.packId,
             (message, percent) => this.progress(runtime, message, percent),
             { signal }
           )
@@ -248,7 +273,7 @@
         type: 'SKELETON_READY',
         packId: pack.id,
         hasSkeleton: true,
-        readyThroughDay: pack.meta?.generation?.readyThroughDay || 3,
+        readyThroughDay: Number(pack.meta?.generation?.readyThroughDay) || 0,
         at: now(),
       });
       this.syncProject(runtime, pack);
@@ -257,6 +282,21 @@
         this.sessions.checkpoint(runtime)
       );
       runtime.hooks.onSkeletonReady?.(pack);
+    }
+    dayReady(runtime, pack, readyThroughDay) {
+      runtime.actor.send({
+        type: 'DAY_READY',
+        packId: pack.id,
+        hasSkeleton: true,
+        readyThroughDay,
+        at: now(),
+      });
+      this.syncProject(runtime, pack);
+      this.emit(runtime);
+      runtime.pendingCheckpoint = runtime.pendingCheckpoint.then(() =>
+        this.sessions.checkpoint(runtime)
+      );
+      runtime.hooks.onDayReady?.(pack, readyThroughDay);
     }
     progress(runtime, message, percent) {
       runtime.hooks.onProgress?.(message, percent);
@@ -269,16 +309,54 @@
     }
     async execute(runtime, activity) {
       try {
-        const pack = await activity(runtime.abortController.signal);
+        let pack = await activity(runtime.abortController.signal);
         if (runtime.abortController.signal.aborted) throw abortError();
         await runtime.pendingCheckpoint;
-        const gate = deps.gateApi.apply(pack, this.harness);
+        let gate = deps.gateApi.apply(pack, this.harness);
         this.contentPack.save(pack);
+        const operation = runtime.actor.getSnapshot().context.operation;
+        const canAutoRepair =
+          ['full', 'resume'].includes(operation) &&
+          !gate.passed &&
+          typeof this.generator.repairFinalGateForPack === 'function';
+        if (canAutoRepair) {
+          try {
+            this.progress(runtime, '最终质量门未通过，正在自动修复课包…', 97);
+            pack = await this.generator.repairFinalGateForPack(
+              pack.id,
+              gate,
+              (message, percent) => this.progress(runtime, message, percent),
+              { signal: runtime.abortController.signal }
+            );
+            if (runtime.abortController.signal.aborted) throw abortError();
+            gate = deps.gateApi.apply(pack, this.harness);
+          } catch (repairError) {
+            if (
+              repairError?.name === 'AbortError' ||
+              repairError?.code === 'ABORTED' ||
+              runtime.abortController.signal.aborted
+            ) {
+              throw repairError;
+            }
+            console.warn('[PackWorkflow] automatic final repair failed', repairError);
+            pack = this.contentPack.load(pack.id) || pack;
+            gate = deps.gateApi.apply(pack, this.harness);
+            pack.meta = pack.meta || {};
+            pack.meta.quality = pack.meta.quality || {};
+            pack.meta.quality.autoRepair = {
+              status: 'failed',
+              error: repairError?.message || String(repairError),
+              finishedAt: now(),
+            };
+            this.progress(runtime, '自动修复未完成，课包将标记为需要修复', 99);
+          }
+          this.contentPack.save(pack);
+        }
         await this.transition(runtime, {
           type: 'COMPLETE',
           packId: pack.id,
           hasSkeleton: true,
-          readyThroughDay: pack.meta?.days || pack.plan?.length || 0,
+            readyThroughDay: Number(pack.meta?.generation?.readyThroughDay) || 0,
           needsReview: !gate.passed,
         });
         const previous = runtime.actor.getSnapshot().context.previousPackId;
@@ -306,6 +384,7 @@
           const partialStatus = [
             'repair',
             'materials',
+            'courseGlossary',
             'dayGlossary',
             'customGlossary',
           ].includes(context.operation)

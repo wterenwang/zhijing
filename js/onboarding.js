@@ -59,41 +59,42 @@ const OnboardingGuide = (() => {
     },
     {
       id: 'today',
-      title: '「今天」：每日主战场',
-      say: '资料、练习、复述、打卡都在这一页。自建路径后，布局完全一样。',
-      body: `<strong>有什么用：</strong>把一天的学习收成固定节奏——先看任务与资料，再动手练，最后打卡留痕。<br>
+      title: '「今天」：按节奏完成一课',
+      say: '新版今天页把重点收成一条学习动线。自建路径后，布局完全一样。',
+      body: `<strong>有什么用：</strong>把一天的学习收成固定节奏，减少来回寻找功能。<br>
         <ol class="onb-steps">
-          <li>上方看今日任务与推荐资料</li>
-          <li>往下滚到练习区作答</li>
-          <li>写一点费曼复述，点「完成打卡」</li>
+          <li>先按顺序完成任务清单</li>
+          <li>接着看推荐资料，再到练习区作答</li>
+          <li>在学习复盘里写复述或笔记</li>
+          <li>最后点「完成打卡」</li>
         </ol>
-        <p class="onb-tip">现在可以自己滚一滚页面，熟悉区块。准备好了点「下一步」看练习与打卡。</p>
+        <p class="onb-tip">页面右侧保留学习统计和日历。现在可以滚动看看完整动线。</p>
         <button type="button" class="btn-secondary onb-try-btn" data-onb-try="practice">滚到练习区试一下</button>`,
       pose: 'point',
       tour: {
         enterDefault: true,
-        focus: 'resources',
-        spotlight: '#day-card, #resources-section',
+        focus: 'sprint',
+        spotlight: '#today-flow .task-block, #day-card',
       },
     },
     {
       id: 'practice',
-      title: '练习 · 复述 · 打卡',
-      say: '练习写一句也好，复述用自己的话更好。打卡是软门槛——没写完也会提醒你，但仍可打卡。',
+      title: '练习、复盘与打卡',
+      say: '练习写一句也好，复述用自己的话更好。打卡是软门槛，没写完会提醒你，但仍可打卡。',
       body: `<strong>有什么用：</strong>把「看过」变成「能讲出来」；连续打卡形成路径进度。<br>
         <ol class="onb-steps">
           <li>在练习框里按题意简单作答</li>
-          <li>（可选）点「AI 参考」看点评——需先开智能功能</li>
-          <li>在复述区用自己的话总结今天</li>
+          <li>（可选）点「AI 参考」看点评，需先开智能功能</li>
+          <li>在「复述与笔记」标签间切换，整理今天所学</li>
           <li>点「完成打卡」</li>
         </ol>
-        <p class="onb-tip">高亮区可以动手试写；试用完点「下一步」。</p>
-        <button type="button" class="btn-secondary onb-try-btn" data-onb-try="practice">再次定位到练习</button>`,
+        <p class="onb-tip">练习、复盘和打卡组成今天的收尾动作。</p>
+        <button type="button" class="btn-secondary onb-try-btn" data-onb-try="reflection">定位到复述与笔记</button>`,
       pose: 'practice',
       tour: {
         enterDefault: true,
         focus: 'practice',
-        spotlight: '#practice-section, #checkin-area',
+        spotlight: '#practice-section, #reflection-workspace, #checkin-area',
       },
     },
     {
@@ -330,6 +331,17 @@ const OnboardingGuide = (() => {
       setTimeout(() => {
         if (typeof api?.focusSection === 'function') api.focusSection('practice');
         const anchor = applySpotlight('#practice-section, #checkin-area');
+        placeCoach(anchor);
+      }, 200);
+      return;
+    }
+    if (kind === 'reflection') {
+      if (typeof api?.enterProject === 'function') {
+        api.enterProject(defaultProjectId(), { focus: 'feynman' });
+      }
+      setTimeout(() => {
+        if (typeof api?.focusSection === 'function') api.focusSection('feynman');
+        const anchor = applySpotlight('#reflection-workspace, #feynman-section');
         placeCoach(anchor);
       }, 200);
       return;

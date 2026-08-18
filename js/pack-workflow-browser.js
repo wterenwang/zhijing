@@ -54,6 +54,10 @@
       await recoveryPromise;
       return requireController().generateMaterials(...args);
     },
+    async generateCourseGlossary(...args) {
+      await recoveryPromise;
+      return requireController().generateCourseGlossary(...args);
+    },
     async generateDayGlossary(...args) {
       await recoveryPromise;
       return requireController().generateDayGlossary(...args);

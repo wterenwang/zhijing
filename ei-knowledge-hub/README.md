@@ -1,73 +1,54 @@
-# React + TypeScript + Vite
+# 知径知识库前端
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+`ei-knowledge-hub` 是知径桌面应用中的知识库子项目，负责把课包中的章节、术语和项目里程碑呈现为可搜索、可浏览、可关联的学习空间。
 
-Currently, two official plugins are available:
+## 提供的页面
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- 知识库首页与学习入口
+- 章节精读与 Markdown 渲染
+- 全文搜索
+- 术语图鉴与易混概念对比
+- 知识关系图
+- 项目 / 作品集里程碑
 
-## React Compiler
+运行时内容由主应用注入。开发环境没有课包数据时，会使用 `src/data/` 下的演示数据。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 技术栈
 
-## Expanding the ESLint configuration
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS
+- React Router
+- D3 Force
+- React Markdown + GFM
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 本地开发
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm ci
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+默认由 Vite 输出本地开发地址。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 构建
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```
+
+构建包含 TypeScript 检查，产物输出到 `dist/`。桌面应用使用仓库根目录的 `hub/` 作为打包内容；修改本子项目后，请确认最新构建产物已同步到 `hub/`，再执行根目录的 Electron 打包命令。
+
+## 关键目录
+
+```text
+src/
+├─ components/     通用布局、搜索、Markdown 和图谱组件
+├─ context/        运行时课包内容上下文
+├─ data/           演示数据与术语定义
+├─ lib/            搜索、内容适配和运行时课包转换
+└─ pages/          首页、章节、搜索、术语、图谱和项目页面
+```
+
+本子项目属于知径仓库的一部分，授权条款与仓库根目录 README 一致。

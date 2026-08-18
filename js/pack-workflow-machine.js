@@ -41,6 +41,7 @@
       eventKeepsReview: ({ event }) =>
         event.operation === 'repair' ||
         event.operation === 'materials' ||
+        event.operation === 'courseGlossary' ||
         event.operation === 'dayGlossary' ||
         event.operation === 'customGlossary',
       hasPack: ({ context }) => !!context.packId,
@@ -51,7 +52,9 @@
         ...context,
         packId: event.packId || context.packId,
         hasSkeleton: true,
-        readyThroughDay: Number(event.readyThroughDay) || context.readyThroughDay || 3,
+        readyThroughDay: Number.isFinite(Number(event.readyThroughDay))
+          ? Number(event.readyThroughDay)
+          : Number(context.readyThroughDay) || 0,
         lastError: null,
         updatedAt: event.at || new Date().toISOString(),
       })),
@@ -115,6 +118,7 @@
       },
       filling: {
         on: {
+          DAY_READY: { actions: 'markSkeleton' },
           CANCEL: 'cancelling',
           FAIL: [
             { target: 'partial', guard: 'eventHasSkeleton', actions: 'applyEvent' },

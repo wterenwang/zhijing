@@ -2,6 +2,18 @@
  * 领域内容包：多内置课包 + localStorage 自定义包
  * 默认内置：pm-30-intro；具身智能 embodied-ai-pm 仅保留代码能力，不自动进入路径列表
  */
+const ContentPackQualityContract = (() => {
+  if (typeof PackQualityContract !== 'undefined') return PackQualityContract;
+  if (typeof module === 'object' && module.exports && typeof require === 'function') {
+    try {
+      return require('./pack-quality-contract.js');
+    } catch {
+      return null;
+    }
+  }
+  return null;
+})();
+
 const ContentPack = (() => {
   const PACK_PREFIX = 'learning-content-pack:';
   const BUILTIN_DEFAULT = 'pm-30-intro';
@@ -22,7 +34,10 @@ const ContentPack = (() => {
     try {
       const raw = localStorage.getItem(packKey(id));
       if (!raw) return null;
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      return ContentPackQualityContract?.normalizePack
+        ? ContentPackQualityContract.normalizePack(parsed)
+        : parsed;
     } catch {
       return null;
     }
@@ -30,7 +45,11 @@ const ContentPack = (() => {
 
   function save(pack) {
     if (!pack?.id || isBuiltinPackId(pack.id)) return;
-    localStorage.setItem(packKey(pack.id), JSON.stringify(pack));
+    const value = ContentPackQualityContract?.normalizePack
+      ? ContentPackQualityContract.normalizePack(pack, { touchContent: true })
+      : pack;
+    localStorage.setItem(packKey(pack.id), JSON.stringify(value));
+    return value;
   }
 
   function remove(id) {
@@ -43,8 +62,10 @@ const ContentPack = (() => {
   }
 
   function emptyPack(meta = {}) {
-    return {
+    const now = new Date().toISOString();
+    const pack = {
       version: 1,
+      schemaVersion: ContentPackQualityContract?.SCHEMA_VERSION || 2,
       id: meta.id || uid(),
       meta: {
         title: meta.title || '',
@@ -64,9 +85,19 @@ const ContentPack = (() => {
       dayResources: {},
       dayExercises: {},
       status: 'draft',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
+      contentUpdatedAt: now,
+      generation: { provenance: {} },
+      evaluation: {
+        status: 'not-evaluated',
+        evaluatedAt: '',
+        findings: [],
+      },
     };
+    return ContentPackQualityContract?.normalizePack
+      ? ContentPackQualityContract.normalizePack(pack, { now })
+      : pack;
   }
 
   let activeCustom = null;
@@ -265,6 +296,11 @@ const ContentPack = (() => {
         q: String(ex.q || ex.question || '').trim(),
         rubric: Array.isArray(ex.rubric) ? ex.rubric.map(String).filter(Boolean) : [],
         ref: ex.ref ? String(ex.ref) : '',
+        commonMistakes: Array.isArray(ex.commonMistakes)
+          ? ex.commonMistakes.map(String).filter(Boolean)
+          : [],
+        feedbackMode: String(ex.feedbackMode || 'rubric'),
+        type: String(ex.type || 'short-answer'),
       })).filter((ex) => ex.q);
     }
     if (typeof buildGeneratedExercises === 'function' && planDay) {
@@ -303,9 +339,14 @@ const ContentPack = (() => {
     const resources = Array.isArray(raw.resources)
       ? raw.resources
           .map((r) => ({
+            sourceId: String(r.sourceId || r.id || '').trim(),
             title: String(r.title || '').trim(),
             url: String(r.url || '').trim(),
             type: String(r.type || 'article'),
+            publisher: String(r.publisher || '').trim(),
+            publishedAt: String(r.publishedAt || '').trim(),
+            retrievedAt: String(r.retrievedAt || '').trim(),
+            sourceTier: String(r.sourceTier || 'unknown').trim(),
           }))
           .filter((r) => r.title && r.url && !isLazySearchPageResource(r))
       : [];
@@ -381,6 +422,14 @@ const ContentPack = (() => {
   }
 
   return {
+    SCHEMA_VERSION: ContentPackQualityContract?.SCHEMA_VERSION || 2,
+    V2_SCHEMA: ContentPackQualityContract?.V2_SCHEMA || null,
+    QUALITY_THRESHOLDS: ContentPackQualityContract?.QUALITY_THRESHOLDS || null,
+    qualityContract: ContentPackQualityContract,
+    normalizePack: ContentPackQualityContract?.normalizePack || ((pack) => pack),
+    validatePack:
+      ContentPackQualityContract?.validatePack ||
+      ((pack) => ({ valid: !!pack, errors: [], warnings: [], issues: [], value: pack })),
     BUILTIN_ID,
     BUILTIN_DEFAULT,
     BUILTIN_EMBODY,
@@ -415,3 +464,5 @@ const ContentPack = (() => {
     getHubChaptersForDay,
   };
 })();
+
+if (typeof module === 'object' && module.exports) module.exports = ContentPack;

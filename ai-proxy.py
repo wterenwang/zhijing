@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """本地静态服务 + DeepSeek / 搜索 API 代理（解决浏览器 CORS，Key 仍仅存于本机浏览器）"""
 import json
+import html
+import ipaddress
 import os
+import re
+import socket
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 3000
@@ -13,6 +19,232 @@ DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_ANTHROPIC_URL = "https://api.deepseek.com/anthropic/v1/messages"
 # DeepSeek-V4-Flash-0731 正式版
 DEEPSEEK_MODEL = "deepseek-v4-flash"
+META_MAX_BYTES = 512 * 1024
+META_TIMEOUT_SECONDS = 7
+TRUSTED_PROXY_MAPPED_HOSTS = {"api.github.com", "github.com", "www.github.com"}
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _assert_public_url(raw_url):
+    parsed = urllib.parse.urlparse(str(raw_url or ""))
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("只允许有效的 HTTP/HTTPS URL")
+    if parsed.hostname.lower() == "localhost" or parsed.hostname.lower().endswith(".localhost"):
+        raise PermissionError("拒绝访问本机地址")
+    addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    if not addresses:
+        raise PermissionError("无法解析目标地址")
+    trusted_proxy_mapping = (
+        parsed.scheme == "https" and parsed.hostname.lower() in TRUSTED_PROXY_MAPPED_HOSTS
+    )
+    for item in addresses:
+        ip = ipaddress.ip_address(item[4][0])
+        # Windows 上的透明代理可能把 GitHub 官方域名映射到 RFC 2544
+        # 198.18.0.0/15；仅对固定 HTTPS 白名单接受这种代理地址。
+        proxy_benchmark_ip = ip in ipaddress.ip_network("198.18.0.0/15")
+        if not ip.is_global and not (trusted_proxy_mapping and proxy_benchmark_ip):
+            raise PermissionError("拒绝访问非公网地址")
+    return parsed.geturl()
+
+
+def _fetch_public_text(raw_url, accept="text/html,application/json"):
+    current = str(raw_url or "")
+    opener = urllib.request.build_opener(_NoRedirect)
+    for redirects in range(4):
+        current = _assert_public_url(current)
+        req = urllib.request.Request(
+            current,
+            headers={
+                "Accept": accept,
+                "User-Agent": "ZhiJing-Learning-Metadata/1.0",
+            },
+        )
+        try:
+            with opener.open(req, timeout=META_TIMEOUT_SECONDS) as response:
+                length = int(response.headers.get("Content-Length") or 0)
+                if length > META_MAX_BYTES:
+                    raise ValueError("响应体过大")
+                body = response.read(META_MAX_BYTES + 1)
+                if len(body) > META_MAX_BYTES:
+                    raise ValueError("响应体过大")
+                return current, body.decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as err:
+            if err.code in (301, 302, 303, 307, 308):
+                if redirects == 3:
+                    raise ValueError("重定向次数过多")
+                location = err.headers.get("Location")
+                if not location:
+                    raise ValueError("无效重定向")
+                current = urllib.parse.urljoin(current, location)
+                continue
+            raise
+    raise ValueError("元数据抓取失败")
+
+
+def _html_meta(document, name):
+    escaped = re.escape(name)
+    patterns = (
+        rf'<meta[^>]+(?:property|name)=["\']{escaped}["\'][^>]+content=["\']([^"\']*)["\'][^>]*>',
+        rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']{escaped}["\'][^>]*>',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, document or "", re.IGNORECASE)
+        if match:
+            return re.sub(r"\s+", " ", html.unescape(match.group(1))).strip()
+    return ""
+
+
+def _github_parts(raw_url):
+    parsed = urllib.parse.urlparse(str(raw_url or ""))
+    if parsed.hostname not in ("github.com", "www.github.com"):
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return None
+    path = parts[4:] if len(parts) > 4 and parts[2] in ("blob", "tree") else []
+    return {"owner": parts[0], "repo": re.sub(r"\.git$", "", parts[1]), "path": path}
+
+
+def _markdown_title(markdown, repo_name, file_name=""):
+    generic = {
+        str(value or "").strip().lower()
+        for value in (repo_name, file_name, "readme", "readme.md", "index", "index.md")
+        if str(value or "").strip()
+    }
+    for line in str(markdown or "").splitlines()[:80]:
+        match = re.match(r"^\s{0,3}#{1,3}\s+(.+?)\s*#*\s*$", line)
+        if not match:
+            continue
+        title = match.group(1)
+        title = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", title)
+        title = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", title)
+        title = re.sub(r"<[^>]+>", "", title)
+        title = re.sub(r"[*_`~]", "", title)
+        title = re.sub(r"\s+", " ", title).strip()
+        if len(title) >= 4 and title.lower() not in generic:
+            return title
+    return ""
+
+
+def _github_display_title(gh, repo_name, markdown="", description=""):
+    name = str(repo_name or gh.get("repo") or "GitHub")
+    file_name = gh["path"][-1] if gh.get("path") else ""
+    semantic = _markdown_title(markdown, name, file_name) or re.sub(
+        r"\s+", " ", str(description or "")
+    ).strip()
+    if semantic:
+        return f"{semantic[:100]}（GitHub）"
+    return f"{name} · {file_name}" if file_name else f"{name} · GitHub 项目"
+
+
+def _resolve_metadata_url(raw_url):
+    original_url = str(raw_url or "").strip()
+    gh = _github_parts(original_url)
+    try:
+        if gh:
+            api_url = "https://api.github.com/repos/{}/{}".format(
+                urllib.parse.quote(gh["owner"]), urllib.parse.quote(gh["repo"])
+            )
+            _, body = _fetch_public_text(api_url, "application/vnd.github+json")
+            repo = json.loads(body)
+            source_text = ""
+            try:
+                content_path = (
+                    "/contents/"
+                    + "/".join(urllib.parse.quote(part) for part in gh["path"])
+                    if gh["path"]
+                    else "/readme"
+                )
+                _, source_text = _fetch_public_text(
+                    api_url + content_path, "application/vnd.github.raw+json"
+                )
+            except Exception:
+                source_text = ""
+            excerpt = re.sub(r"\s+", " ", source_text).strip()[:1200]
+            display = _github_display_title(
+                gh,
+                repo.get("name") or gh["repo"],
+                source_text,
+                repo.get("description") or "",
+            )
+            return {
+                "url": original_url,
+                "canonicalUrl": repo.get("html_url") or original_url,
+                "displayTitle": display,
+                "description": (repo.get("description") or "")[:500],
+                "contentExcerpt": excerpt,
+                "publisher": (repo.get("owner") or {}).get("login") or gh["owner"],
+                "provider": "github-rest",
+                "degraded": False,
+            }
+        final_url, document = _fetch_public_text(original_url)
+        title_match = re.search(
+            r"<title[^>]*>([\s\S]*?)</title>", document, re.IGNORECASE
+        )
+        title = _html_meta(document, "og:title") or (
+            re.sub(r"\s+", " ", html.unescape(title_match.group(1))).strip()
+            if title_match
+            else ""
+        )
+        return {
+            "url": original_url,
+            "canonicalUrl": _html_meta(document, "og:url") or final_url,
+            "displayTitle": title[:120],
+            "description": (
+                _html_meta(document, "og:description")
+                or _html_meta(document, "description")
+            )[:500],
+            "contentExcerpt": "",
+            "publisher": urllib.parse.urlparse(original_url).hostname or "",
+            "provider": "html",
+            "degraded": False,
+        }
+    except Exception as error:
+        return {
+            "url": original_url,
+            "displayTitle": _github_display_title(gh, gh["repo"]) if gh else "",
+            "description": "",
+            "contentExcerpt": "",
+            "publisher": "",
+            "provider": "github-rest" if gh else "html",
+            "degraded": True,
+            "error": "timeout"
+            if isinstance(error, (TimeoutError, socket.timeout))
+            else str(error),
+        }
+
+
+def _github_repository_search(query, limit):
+    if not query:
+        return []
+    try:
+        url = "https://api.github.com/search/repositories?q={}&per_page={}".format(
+            urllib.parse.quote(query), min(5, limit)
+        )
+        _, body = _fetch_public_text(url, "application/vnd.github+json")
+        data = json.loads(body)
+        return [
+            {
+                "title": repo.get("name") or "",
+                "originalTitle": repo.get("full_name") or "",
+                "displayTitle": f'{repo.get("name") or ""} · GitHub 项目',
+                "url": repo.get("html_url") or "",
+                "snippet": repo.get("description") or "",
+                "description": repo.get("description") or "",
+                "publisher": (repo.get("owner") or {}).get("login") or "",
+                "platform": "github",
+                "sourceRole": "example",
+                "sourceTier": "medium",
+                "provider": "github-rest",
+            }
+            for repo in (data.get("items") or [])[:limit]
+        ]
+    except Exception:
+        return []
 
 
 class ProxyHandler(SimpleHTTPRequestHandler):
@@ -46,6 +278,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     "proxy": True,
                     "service": "deepseek",
                     "search": True,
+                    "metadata": True,
                 },
             )
             return
@@ -58,6 +291,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             return
         if path == "/api/search":
             self._proxy_search()
+            return
+        if path == "/api/meta/resolve":
+            self._resolve_metadata()
             return
         self.send_error(404, "Not Found")
 
@@ -89,6 +325,9 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             # V4 默认开启思考；生成/点评需要稳定 JSON，关闭思考模式
             "thinking": payload.get("thinking") or {"type": "disabled"},
         }
+        response_format = payload.get("responseFormat")
+        if isinstance(response_format, dict) and response_format.get("type") == "json_object":
+            upstream["response_format"] = {"type": "json_object"}
 
         req = urllib.request.Request(
             DEEPSEEK_URL,
@@ -154,6 +393,34 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             },
         )
 
+    def _resolve_metadata(self):
+        payload, err = self._read_json()
+        if err:
+            self._json(400, {"error": {"message": err}})
+            return
+        urls = payload.get("urls") if isinstance(payload.get("urls"), list) else []
+        if len(urls) > 10:
+            self._json(400, {"error": {"message": "单次最多解析 10 个 URL"}})
+            return
+        urls = list(dict.fromkeys(str(url).strip() for url in urls if str(url).strip()))
+        with ThreadPoolExecutor(max_workers=min(3, max(1, len(urls)))) as executor:
+            results = list(executor.map(_resolve_metadata_url, urls))
+        try:
+            github_limit = max(1, min(5, int(payload.get("githubLimit") or 4)))
+        except (TypeError, ValueError):
+            github_limit = 4
+        github_results = _github_repository_search(
+            str(payload.get("githubQuery") or "").strip()[:180], github_limit
+        )
+        self._json(
+            200,
+            {
+                "provider": "local-metadata",
+                "results": results,
+                "githubResults": github_results,
+            },
+        )
+
     def _search_deepseek(self, api_key, query, count):
         """DeepSeek Anthropic 兼容口的服务端 web_search（同一 DeepSeek Key）。"""
         body = {
@@ -169,6 +436,10 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                         "encyclopedias, lectures) about the following topic. "
                         f"Search query: {query}\n"
                         "Prefer Chinese sources when the query is Chinese. "
+                        "Honor every site: restriction exactly. Return direct article, "
+                        "documentation, repository, encyclopedia-entry, or video pages only; "
+                        "never return search, channel, ranking, topic-list, or profile pages. "
+                        "Do not invent or rewrite URLs or titles. "
                         "Do not answer from memory; search first."
                     ),
                 }
@@ -327,7 +598,7 @@ def main():
     print()
 
     try:
-        httpd = ThreadingHTTPServer(("", PORT), ProxyHandler)
+        httpd = ThreadingHTTPServer(("127.0.0.1", PORT), ProxyHandler)
     except OSError:
         print(f"[错误] 端口 {PORT} 已被占用！")
         print("请先关闭之前运行的本地服务窗口，常见情况：")
