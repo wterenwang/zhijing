@@ -178,7 +178,10 @@ npm run pack            # 生成 unpacked 桌面应用
 npm run dist            # 构建 Windows 安装包
 npm run dist:portable   # 构建 Windows 便携版
 npm run dist:mac        # 在 macOS 上构建并签名、公证 Universal DMG + ZIP
+npm run dist:mac:internal # 仅在 macOS 上生成不发布的未签名 Universal 内部留存包
 ```
+
+内部留存包会明确标记为 `UNSIGNED-INTERNAL`，只能用于保存和开发核验，不能上传到正式 Release。正式 macOS 发布仍必须使用 `dist:mac` 并通过签名、公证、Gatekeeper 和双架构检查。
 
 知识库前端位于 `ei-knowledge-hub/`：
 

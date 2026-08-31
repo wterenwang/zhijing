@@ -2993,3 +2993,27 @@ test('macOS 正式发布配置强制 Universal、签名、公证和发布前验�
   assert.doesNotMatch(readme, /xattr\s+-cr/);
   assert.match(readme, /mac-universal/);
 });
+
+test('macOS 内部留存包与正式签名发布通道严格隔离', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.match(pkg.scripts['dist:mac:internal'], /mac\.identity=null/);
+  assert.match(pkg.scripts['dist:mac:internal'], /mac\.notarize=false/);
+  assert.match(pkg.scripts['dist:mac:internal'], /mac\.hardenedRuntime=false/);
+
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', '.github', 'workflows', 'build-mac.yml'),
+    'utf8'
+  );
+  const internalStart = workflow.indexOf('internal-mac:');
+  const signedStart = workflow.indexOf('\n  mac:');
+  assert.ok(internalStart >= 0 && signedStart > internalStart);
+  const internalJob = workflow.slice(internalStart, signedStart);
+  const signedJob = workflow.slice(signedStart);
+
+  assert.match(internalJob, /npm run dist:mac:internal/);
+  assert.match(internalJob, /UNSIGNED-INTERNAL/);
+  assert.match(internalJob, /actions\/upload-artifact@v4/);
+  assert.doesNotMatch(internalJob, /action-gh-release/);
+  assert.match(signedJob, /Require Apple signing and notarization credentials/);
+  assert.match(signedJob, /softprops\/action-gh-release@v2/);
+});

@@ -27,6 +27,7 @@
 
 - macOS 构建改为 Apple Silicon 与 Intel Universal，并强制 Developer ID 签名、Apple 公证、Gatekeeper 与双架构验证。
 - 正式 macOS 产物需要仓库配置 Apple 发布凭据；凭据缺失时工作流会失败且不会上传未签名包。
+- 提供独立的 macOS Universal 内部留存构建；产物强制标记 `UNSIGNED-INTERNAL`，仅保存为 Actions Artifact，绝不进入正式 Release。
 - Windows x64 继续提供安装包。
 - Windows 安装包当前未配置 Authenticode 代码签名，发布说明提供 SHA-256 供下载后核验。
 

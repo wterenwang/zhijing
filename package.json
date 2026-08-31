@@ -15,7 +15,8 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis",
     "dist:portable": "electron-builder --win portable",
-    "dist:mac": "electron-builder --mac dmg zip --publish never"
+    "dist:mac": "electron-builder --mac dmg zip --publish never",
+    "dist:mac:internal": "electron-builder --mac dmg zip --universal --publish never -c.mac.identity=null -c.mac.notarize=false -c.mac.hardenedRuntime=false"
   },
   "build": {
     "appId": "com.zhijing.app",

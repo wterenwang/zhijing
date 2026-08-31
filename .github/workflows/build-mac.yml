@@ -4,6 +4,15 @@ name: Build macOS
 
 on:
   workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "构建模式：内部未签名留存包，或正式签名发布包"
+        required: true
+        default: internal-unsigned
+        type: choice
+        options:
+          - internal-unsigned
+          - signed-release
   push:
     tags:
       - "v*"
@@ -12,7 +21,75 @@ permissions:
   contents: write
 
 jobs:
+  internal-mac:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_mode == 'internal-unsigned'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run workflow regression tests
+        run: npm run test:workflow
+
+      - name: Read version
+        id: ver
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned Universal DMG / ZIP for internal retention only
+        run: npm run dist:mac:internal
+
+      - name: Verify Universal architectures
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find release -type d -name '知径.app' -print -quit)"
+          test -n "$APP_PATH"
+          ARCHS="$(lipo -archs "$APP_PATH/Contents/MacOS/知径")"
+          echo "$ARCHS" | grep -q arm64
+          echo "$ARCHS" | grep -q x86_64
+
+      - name: Audit packaged app for private data and credentials
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find release -type d -name '知径.app' -print -quit)"
+          AUDIT_PATH="$RUNNER_TEMP/zhijing-app-asar"
+          node node_modules/@electron/asar/bin/asar.js extract "$APP_PATH/Contents/Resources/app.asar" "$AUDIT_PATH"
+          test -z "$(find "$AUDIT_PATH" -type f \( -name '.env*' -o -name '*.db' -o -name '*.db-shm' -o -name '*.db-wal' -o -name '*.pem' -o -name '*.key' -o -name 'credentials*' \) -print -quit)"
+          test -z "$(find "$AUDIT_PATH" -type d \( -name '.forge-data' -o -name 'workspaces' -o -name '.git' -o -name '.cursor' \) -print -quit)"
+          if grep -R -I -n -E '/Users/|sk-ant-|sk-proj-|sk-[A-Za-z0-9_-]{30,}|OPENAI_API_KEY[[:space:]]*=|ANTHROPIC_API_KEY[[:space:]]*=|DEEPSEEK_API_KEY[[:space:]]*=' "$AUDIT_PATH"; then
+            echo "Packaged app privacy audit failed"
+            exit 1
+          fi
+
+      - name: Mark artifacts as unsigned and internal only
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          mv "release/Zhijing-${VERSION}-mac-universal.dmg" "release/Zhijing-${VERSION}-mac-universal-UNSIGNED-INTERNAL.dmg"
+          mv "release/Zhijing-${VERSION}-mac-universal.zip" "release/Zhijing-${VERSION}-mac-universal-UNSIGNED-INTERNAL.zip"
+
+      - name: Upload internal unsigned artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhijing-mac-unsigned-internal-${{ github.sha }}
+          path: |
+            release/*-UNSIGNED-INTERNAL.dmg
+            release/*-UNSIGNED-INTERNAL.zip
+          if-no-files-found: error
+          retention-days: 30
+
   mac:
+    if: >-
+      (github.event_name == 'push' && vars.ENABLE_SIGNED_MAC_RELEASE == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_mode == 'signed-release')
     runs-on: macos-latest
     steps:
       - name: Checkout
