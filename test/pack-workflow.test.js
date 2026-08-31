@@ -3017,3 +3017,14 @@ test('macOS 内部留存包与正式签名发布通道严格隔离', () => {
   assert.match(signedJob, /Require Apple signing and notarization credentials/);
   assert.match(signedJob, /softprops\/action-gh-release@v2/);
 });
+
+test('macOS 两种构建模式都可靠导出 package 版本号', () => {
+  const workflow = fs.readFileSync(
+    path.join(__dirname, '..', '.github', 'workflows', 'build-mac.yml'),
+    'utf8'
+  );
+  const safeVersionExport =
+    /VERSION=\$\(node -p "require\('\.\/package\.json'\)\.version"\)\s+echo "version=\$\{VERSION\}" >> "\$\{GITHUB_OUTPUT\}"/g;
+
+  assert.equal([...workflow.matchAll(safeVersionExport)].length, 2);
+});

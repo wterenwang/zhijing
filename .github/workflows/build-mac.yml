@@ -42,7 +42,9 @@ jobs:
 
       - name: Read version
         id: ver
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Build unsigned Universal DMG / ZIP for internal retention only
         run: npm run dist:mac:internal
@@ -109,7 +111,9 @@ jobs:
 
       - name: Read version
         id: ver
-        run: echo "version=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Verify tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
