@@ -22,7 +22,7 @@ export function HomePage() {
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-slate-700 space-y-2">
           <p>
             请返回路径列表，点卡片上的 <strong>生成日课与核心术语</strong>
-            或 <strong>修复日课与核心术语</strong>（需先开启智能功能）。
+            或 <strong>重新生成问题部分</strong>（需先开启智能功能）。
           </p>
           <p className="text-slate-500">通常需要几分钟，请稍候。</p>
         </div>

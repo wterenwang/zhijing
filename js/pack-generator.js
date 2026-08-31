@@ -46,6 +46,7 @@ const PackGenerator = (() => {
       'calls',
       'failures',
       'durationMs',
+      'queueMs',
       'retries',
       'promptTokens',
       'completionTokens',
@@ -84,6 +85,7 @@ const PackGenerator = (() => {
       aiCalls: Number(snapshot.aiMetrics?.calls) || 0,
     });
     pack.meta.performance = {
+      ...performance,
       aiMetrics: mergeAiMetrics(performance.aiMetrics, snapshot.aiMetrics),
       sessions,
       updatedAt: new Date().toISOString(),
@@ -107,19 +109,49 @@ const PackGenerator = (() => {
     if (isAbortError(e)) throw e;
     throwIfAborted();
   }
+  const OPERATIONAL_ERROR_CODES = new Set([
+    'NO_KEY',
+    'NO_PROXY',
+    'AUTH',
+    'BALANCE',
+    'BILLING',
+    'NETWORK',
+    'UPSTREAM_TIMEOUT',
+    'SERVICE_BUSY',
+    'UPSTREAM',
+    'TOOL_BUDGET',
+    'WALL_CLOCK',
+    'WORKFLOW_BUDGET',
+  ]);
+
+  function rethrowOperationalError(error) {
+    if (OPERATIONAL_ERROR_CODES.has(error?.code) || Number(error?.status) >= 400) throw error;
+  }
+
+  function safeDiagnostic(error) {
+    const value = error?.message || String(error || '');
+    if (typeof AiReview !== 'undefined' && AiReview.redactSensitive) {
+      return AiReview.redactSensitive(value);
+    }
+    return String(value)
+      .replace(/\b(?:sk|ds|api)[-_][A-Za-z0-9._-]{8,}\b/gi, '[REDACTED]')
+      .replace(/(bearer\s+)[^\s;,]+/gi, '$1[REDACTED]');
+  }
   let _llmInFlight = 0;
   const _llmWaiters = [];
 
   /** 全局 LLM 槽位：跨课表/术语/知识库并行时合计不超过 LLM_CONCURRENCY */
   async function withLlmSlot(fn) {
+    const queuedAt = Date.now();
     if (_llmInFlight >= LLM_CONCURRENCY) {
       await new Promise((resolve) => {
         _llmWaiters.push(resolve);
       });
     }
     _llmInFlight += 1;
+    const queueMs = Date.now() - queuedAt;
     try {
-      return await fn();
+      return await fn(queueMs);
     } finally {
       _llmInFlight -= 1;
       const next = _llmWaiters.shift();
@@ -310,7 +342,7 @@ ${DEPTH_CONTRACT}`;
         throw error;
       }
     }
-    return withLlmSlot(() => {
+    return withLlmSlot((queueMs) => {
       throwIfAborted();
       return AiReview.chat({
         messages: [
@@ -323,7 +355,7 @@ ${DEPTH_CONTRACT}`;
         responseFormat: jsonMode ? { type: 'json_object' } : undefined,
         onMetrics: (metrics) => {
           if (typeof PackHarness !== 'undefined') {
-            PackHarness.recordAiCall?.({ ...metrics, stage });
+            PackHarness.recordAiCall?.({ ...metrics, queueMs, stage });
           }
         },
       });
@@ -715,7 +747,10 @@ ${DEPTH_CONTRACT}`;
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        console.warn('[PackGenerator] search fail', q, data?.error?.message || res.status);
+        const error = typeof AiReview !== 'undefined' && AiReview.normalizeUpstreamError
+          ? AiReview.normalizeUpstreamError(res.status, data?.error?.message || data?.error || '')
+          : Object.assign(new Error('搜索服务暂时不可用'), { code: 'UPSTREAM', status: res.status });
+        rethrowOperationalError(error);
         return [];
       }
       const results = (Array.isArray(data.results) ? data.results : [])
@@ -726,7 +761,8 @@ ${DEPTH_CONTRACT}`;
       return out;
     } catch (e) {
       rethrowAbort(e);
-      console.warn('[PackGenerator] search error', q, e);
+      rethrowOperationalError(e);
+      console.warn('[PackGenerator] search error', safeDiagnostic(e));
       return [];
     }
   }
@@ -2029,8 +2065,7 @@ ${JSON.stringify({
       const rubric = (Array.isArray(exercise.rubric) ? exercise.rubric : base.rubric)
         .map(String)
         .map((item) => item.trim())
-        .filter(Boolean)
-        .slice(0, 4);
+        .filter(Boolean);
       const commonMistakes = (
         Array.isArray(exercise.commonMistakes) ? exercise.commonMistakes : base.commonMistakes
       )
@@ -2039,11 +2074,11 @@ ${JSON.stringify({
         .filter(Boolean)
         .slice(0, 4);
       return {
-        q: String(exercise.q || exercise.question || base.q).trim().slice(0, 220),
+        q: String(exercise.q || exercise.question || base.q).trim(),
         type: kinds[index],
         objective: String(exercise.objective || topic).trim().slice(0, 100),
         rubric: rubric.length ? rubric : base.rubric,
-        ref: String(exercise.ref || base.ref).trim().slice(0, 360),
+        ref: String(exercise.ref || base.ref).trim(),
         commonMistakes: commonMistakes.length ? commonMistakes : base.commonMistakes,
         feedbackMode: String(exercise.feedbackMode || base.feedbackMode),
       };
@@ -2832,7 +2867,7 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
   }
 
   function glossaryQualityError(stats = {}, cause) {
-    const error = new Error('术语库尚未达到可用标准，请再点「修复阅读与术语」重试');
+    const error = new Error('术语库尚未达到可用标准，请查看失败原因后重新生成问题部分');
     error.code = 'GLOSSARY_QUALITY';
     error.quality = {
       passCount: Number(stats.passCount) || 0,
@@ -2847,18 +2882,8 @@ ${retryContext.length ? `## 上轮配图未通过项（只修这些问题）\n${
   }
 
   function rethrowGlossaryOperationalError(error) {
-    const operationalCodes = new Set([
-      'NO_KEY',
-      'NO_PROXY',
-      'SERVICE_BUSY',
-      'UPSTREAM',
-      'TOOL_BUDGET',
-      'WALL_CLOCK',
-      'WORKFLOW_BUDGET',
-      'TOOL_NOT_ALLOWED',
-      'CAPABILITY',
-    ]);
-    if (operationalCodes.has(error?.code) || Number(error?.status) >= 400) throw error;
+    rethrowOperationalError(error);
+    if (error?.code === 'TOOL_NOT_ALLOWED' || error?.code === 'CAPABILITY') throw error;
   }
 
   /** 合并模型选词与正文候选，确保模型选词失败时仍有可靠词头可精写。 */
@@ -4545,7 +4570,8 @@ ${evidenceBindings.length
       map.set(ch.slug, written.markdown);
     } catch (e) {
       rethrowAbort(e);
-      console.warn('[PackGenerator] daily hub failed Day', dayPlan.day, e);
+      rethrowOperationalError(e);
+      console.warn('[PackGenerator] daily hub failed Day', dayPlan.day, safeDiagnostic(e));
       const fallbackEvidence = buildLessonEvidenceBindings(
         await fetchWikipediaResources(dayPlan.topic || ch.title, 2)
       );
@@ -4560,6 +4586,7 @@ ${evidenceBindings.length
         );
       } catch (fallbackError) {
         rethrowAbort(fallbackError);
+        rethrowOperationalError(fallbackError);
         map.set(
           ch.slug,
           ensureLessonEvidenceBacklinks(richFallbackFromLesson(meta, ch, dayPlan, {
@@ -4711,13 +4738,12 @@ ${evidenceBindings.length
     let exercises = Array.isArray(row?.exercises) ? row.exercises : [];
     exercises = exercises
       .map((ex) => ({
-        q: String(ex.q || ex.question || '').trim().slice(0, 180),
+        q: String(ex.q || ex.question || '').trim(),
         rubric: (Array.isArray(ex.rubric) ? ex.rubric : [])
           .map(String)
           .map((s) => s.trim())
-          .filter(Boolean)
-          .slice(0, 4),
-        ref: ex.ref ? String(ex.ref).trim().slice(0, 120) : '',
+          .filter(Boolean),
+        ref: ex.ref ? String(ex.ref).trim() : '',
       }))
       .filter((ex) => ex.q && !isTemplateExerciseQuestion(ex.q))
       .slice(0, 4);
@@ -4938,7 +4964,8 @@ rubric 2-3 条可打分；commonMistakes 1-3 条。`;
         searchByDay = curated.searchByDay || new Map();
       } catch (e) {
         rethrowAbort(e);
-        console.warn('[PackGenerator] resource curate failed', e);
+        rethrowOperationalError(e);
+        console.warn('[PackGenerator] resource curate failed', safeDiagnostic(e));
       }
       if (typeof TaskResourceBinder !== 'undefined' && TaskResourceBinder.bindDay) {
         planSlice.forEach((dayPlan) => {
@@ -4982,7 +5009,8 @@ rubric 2-3 条可打分；commonMistakes 1-3 条。`;
         }
       } catch (e) {
         rethrowAbort(e);
-        console.warn('[PackGenerator] exercises failed', e);
+        rethrowOperationalError(e);
+        console.warn('[PackGenerator] exercises failed', safeDiagnostic(e));
       }
       const byDay = new Map();
       for (const d of planSlice) {
@@ -5022,7 +5050,8 @@ rubric 2-3 条可打分；commonMistakes 1-3 条。`;
       return [...byDay.values()];
     } catch (e) {
       rethrowAbort(e);
-      console.warn('[PackGenerator] day materials chunk failed', e);
+      rethrowOperationalError(e);
+      console.warn('[PackGenerator] day materials chunk failed', safeDiagnostic(e));
       return [];
     }
   }
@@ -6776,8 +6805,10 @@ rubric 2-3 条可打分；commonMistakes 1-3 条。`;
   async function generateHubForPack(packId, onProgress = () => {}, opts = {}) {
     beginJob(opts.signal);
     let sessionOutcome = 'ok';
+    let pack = null;
+    let sessionStarted = false;
     try {
-    const pack = ContentPack.load(packId);
+    pack = ContentPack.load(packId);
     if (!pack) throw new Error('找不到内容包');
     if (typeof PackHarness !== 'undefined') {
       PackHarness.beginSession({
@@ -6787,6 +6818,7 @@ rubric 2-3 条可打分；commonMistakes 1-3 条。`;
         role: pack.meta?.role,
         days: pack.meta?.days || pack.plan?.length || 30,
       });
+      sessionStarted = true;
       PackHarness.setRole('generator');
     }
     throwIfAborted();
@@ -6880,9 +6912,18 @@ rubric 2-3 条可打分；commonMistakes 1-3 条。`;
     return pack;
     } catch (error) {
       sessionOutcome = isAbortError(error) ? 'cancelled' : 'failed';
+      if (sessionStarted && pack) {
+        const snap = PackHarness.snapshot();
+        if (snap) {
+          storeHarnessSnapshot(pack, snap);
+          ContentPack.save(pack);
+        }
+      }
       throw error;
     } finally {
-      if (typeof PackHarness !== 'undefined') PackHarness.endSession(sessionOutcome);
+      if (sessionStarted && typeof PackHarness !== 'undefined') {
+        PackHarness.endSession(sessionOutcome);
+      }
       endJob();
     }
   }
@@ -7168,6 +7209,7 @@ rubric 2-3 条可打分；commonMistakes 1-3 条。`;
       dayRepairTargets,
       processLessonMicroBatches,
       repairPlanFromGate,
+      normalizeDayMaterialRow,
       sourceUrlSignatureFromPack,
       mergeAiMetrics,
       storeHarnessSnapshot,

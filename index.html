@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/mascot.css?v=20260716m">
-  <link rel="stylesheet" href="css/splash.css?v=20260716f">
+  <link rel="stylesheet" href="css/splash.css?v=20260828r1">
   <style>
     /* ===== CSS 变量：清爽亮色主题 ===== */
     :root {
@@ -308,9 +308,7 @@
     }
 
     .task-list li {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
+      display: block;
       padding: 12px 14px;
       border-radius: 10px;
       background: rgba(8, 145, 178, 0.04);
@@ -319,15 +317,39 @@
       color: var(--text-primary);
     }
 
-    .task-list li::before {
-      content: "";
-      flex-shrink: 0;
-      width: 7px;
-      height: 7px;
-      margin-top: 7px;
-      border-radius: 50%;
-      background: var(--accent-cyan);
-      box-shadow: 0 0 6px rgba(8, 145, 178, 0.35);
+    .task-list li::before { content: none; }
+    .task-check {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+    }
+    .task-check input { margin-top: 4px; accent-color: var(--accent-green); }
+    .task-list li.done .task-text { color: var(--text-muted); text-decoration: line-through; }
+    .task-guidance {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 9px 0 0 26px;
+    }
+    .task-guidance button,
+    .task-guidance a {
+      border: 0;
+      padding: 0;
+      background: none;
+      color: var(--accent-cyan);
+      font: inherit;
+      font-size: 0.78rem;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .task-guidance button:hover,
+    .task-guidance a:hover { text-decoration: underline; }
+    .practice-q,
+    .practice-rubric,
+    .practice-ref {
+      overflow-wrap: anywhere;
+      white-space: normal;
     }
 
     /* 打卡按钮 */
@@ -4570,6 +4592,7 @@
   <script src="js/pm30-hub.js"></script>
   <script src="js/pack-quality-contract.js"></script>
   <script src="js/task-resource-binder.js"></script>
+  <script src="js/daily-learning-state.js"></script>
   <script src="js/content-pack.js"></script>
   <script src="node_modules/xstate/dist/xstate.umd.min.js"></script>
   <script src="js/pack-workflow-machine.js"></script>
@@ -4817,6 +4840,7 @@
         applications: [],
         weeklyReviews: {},
         dailyPractice: {},
+        dailyTaskState: {},
         hotFeed: null,
         hotArchive: {},
         srsCards: {},
@@ -4866,6 +4890,9 @@
       if (!Array.isArray(appData.srsArchive)) appData.srsArchive = [];
       if (!Array.isArray(appData.srsSessions)) appData.srsSessions = [];
       if (appData.srsGenMeta === undefined) appData.srsGenMeta = null;
+      if (!appData.dailyTaskState || typeof appData.dailyTaskState !== 'object') {
+        appData.dailyTaskState = {};
+      }
       // 首次使用：设置起始日期为今天
       if (!appData.startDate) {
         appData.startDate = formatDateISO(new Date());
@@ -5311,6 +5338,34 @@
       }
     }
 
+    function taskScopeForDay(day) {
+      const projectId = activeProject?.id || ProjectPlatform.getActiveId?.() || 'unknown';
+      return DailyLearningState.scopeKey(projectId, formatDateISO(getDateForDay(day)), day);
+    }
+
+    function taskIdsForPlan(plan) {
+      return (plan?.tasks || []).map((task, index) =>
+        DailyLearningState.taskItemId(task, index, 'plan')
+      );
+    }
+
+    function lessonChecklistIdsForDay(day) {
+      const pack = ContentPack.getActive?.();
+      const chapter = ContentPack.getHubChaptersForDay?.(day)?.[0];
+      const markdown = chapter?.slug ? String(pack?.hub?.chapters?.[chapter.slug] || '') : '';
+      const items = [...markdown.matchAll(/^\s*[-*]\s+\[[ xX]\]\s+(.+)$/gm)].map((match) => match[1].trim());
+      return items.map((item, index) => DailyLearningState.taskItemId(item, index, 'lesson'));
+    }
+
+    function getTaskProgress(day, plan = getPlanDay(day)) {
+      const ids = [...taskIdsForPlan(plan), ...lessonChecklistIdsForDay(day)];
+      return DailyLearningState.taskProgress(
+        appData.dailyTaskState || {},
+        taskScopeForDay(day),
+        ids
+      );
+    }
+
     function getDayLearningQuality(day) {
       const key = String(day);
       const plan = getPlanDay(day);
@@ -5325,7 +5380,11 @@
         if (saved[String(i)]?.done) practiceDone++;
       }
       const feynmanOk = !!(appData.feynman?.[key] || '').trim();
+      const taskProgress = getTaskProgress(day, plan);
       const missing = [];
+      if (!taskProgress.complete) {
+        missing.push(`任务清单未完成（${taskProgress.done}/${taskProgress.total}）`);
+      }
       if (practiceTotal > 0 && practiceDone < practiceTotal) {
         missing.push(`练习未完成（${practiceDone}/${practiceTotal}）`);
       }
@@ -5333,6 +5392,8 @@
       return {
         practiceDone,
         practiceTotal,
+        taskDone: taskProgress.done,
+        taskTotal: taskProgress.total,
         feynmanOk,
         missing,
         ready: missing.length === 0,
@@ -5395,20 +5456,34 @@
       const tasksEl = document.getElementById('view-tasks');
       const taskBindings = Array.isArray(plan.taskBindings) ? plan.taskBindings : [];
       const taskResources = ContentPack.getDayResources?.(day)?.resources || [];
+      const taskScope = taskScopeForDay(day);
       tasksEl.innerHTML = (plan.tasks || []).map((task, taskIndex) => {
         const binding = taskBindings.find(row => Number(row?.taskIndex) === taskIndex);
+        const taskId = DailyLearningState.taskItemId(task, taskIndex, 'plan');
+        const done = DailyLearningState.isTaskDone(appData.dailyTaskState, taskScope, taskId);
+        let howTo = '<button type="button" data-action="task-open-lesson">怎么做</button>';
         if (binding?.kind === 'hub' && binding.hubSlug) {
-          return `<li><a class="hub-link" href="#" data-hub-slug="${escapeHtml(binding.hubSlug)}">${escapeHtml(task)}</a></li>`;
+          howTo = `<a href="#" data-hub-slug="${escapeHtml(binding.hubSlug)}">怎么做</a>`;
         }
         if (binding?.kind === 'resource' && binding.sourceId) {
           const resource = taskResources.find(row =>
             String(row?.sourceId || row?.evidenceId || '') === String(binding.sourceId)
           );
           if (resource?.url) {
-            return `<li><a href="${escapeHtml(resource.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(task)}</a></li>`;
+            howTo = `<a href="${escapeHtml(resource.url)}" target="_blank" rel="noopener noreferrer">怎么做</a>`;
           }
         }
-        return `<li>${escapeHtml(task)}</li>`;
+        return `<li class="${done ? 'done' : ''}" data-task-id="${escapeHtml(taskId)}">
+          <label class="task-check">
+            <input type="checkbox" data-action="toggle-task" ${done ? 'checked' : ''}>
+            <span class="task-text">${escapeHtml(task)}</span>
+          </label>
+          <div class="task-guidance">
+            ${howTo}
+            <button type="button" data-action="task-standard">做成什么样</button>
+            <button type="button" data-action="task-feedback">我做得怎么样</button>
+          </div>
+        </li>`;
       }).join('');
 
       // 渲染今日资料与每日练习
@@ -5582,9 +5657,22 @@
         const pct = total ? Math.round((checked / total) * 100) : 0;
         const cardPack =
           p.packId && typeof ContentPack !== 'undefined' ? ContentPack.load(p.packId) : null;
+        const pendingPack =
+          p.pendingPackId && typeof ContentPack !== 'undefined'
+            ? ContentPack.load(p.pendingPackId)
+            : null;
+        const qualityPack = pendingPack || cardPack;
+        const needsAttention =
+          p.packStatus === 'needs_review' ||
+          p.pendingPackStatus === 'needs_review' ||
+          qualityPack?.meta?.quality?.needsReview;
         let qualityNote = '';
         let badge;
-        if (p.packStatus === 'generating') {
+        if (p.pendingPackStatus === 'generating') {
+          badge = '<span class="pc-badge" style="color:#ea580c;background:rgba(234,88,12,0.12)">当前版本可学 · 新版本准备中</span>';
+        } else if (p.pendingPackStatus === 'partial') {
+          badge = '<span class="pc-badge" style="color:#0891b2;background:rgba(8,145,178,0.12)">当前版本可学 · 新版本可继续</span>';
+        } else if (p.packStatus === 'generating') {
           badge = '<span class="pc-badge" style="color:#ea580c;background:rgba(234,88,12,0.12)">准备中…</span>';
         } else if (p.packStatus === 'partial') {
           const readyN =
@@ -5599,15 +5687,22 @@
           badge = '<span class="pc-badge" style="color:#dc2626;background:rgba(220,38,38,0.1)">生成失败</span>';
         } else if (p.packStatus === 'cancelled') {
           badge = '<span class="pc-badge" style="color:#64748b;background:rgba(100,116,139,0.12)">已停止</span>';
-        } else if (p.packStatus === 'needs_review') {
+        } else if (needsAttention) {
           const summary =
             typeof PackWorkflowGate !== 'undefined'
-              ? PackWorkflowGate.summarizeIssues?.(cardPack?.meta?.quality?.workflowGate)
+              ? PackWorkflowGate.summarizeIssues?.(qualityPack?.meta?.quality?.workflowGate)
               : '';
           badge = '<span class="pc-badge" style="color:#b45309;background:rgba(245,158,11,0.14)">已生成 · 需要修复</span>';
-          qualityNote = summary
-            ? `<p class="pc-note">待修复：${escapeHtml(summary)}</p>`
-            : '<p class="pc-note">课包已经生成，但尚未通过最终质量门。</p>';
+          const gate = qualityPack?.meta?.quality?.workflowGate || {};
+          const checks = Array.isArray(gate.checks) ? gate.checks : [];
+          const passedChecks = checks.filter((check) => check.passed).map((check) => check.label);
+          const failedChecks = checks.filter((check) => !check.passed).map((check) => check.label);
+          qualityNote = `<div class="pc-note">
+            <p>${summary ? `需要处理：${escapeHtml(summary)}` : '部分结构检查未通过。'}</p>
+            ${passedChecks.length ? `<p>已通过：${escapeHtml(passedChecks.join('、'))}</p>` : ''}
+            ${failedChecks.length ? `<p>未通过：${escapeHtml(failedChecks.join('、'))}；会影响对应内容，其他已就绪内容仍可学习。</p>` : ''}
+            <details><summary>查看失败原因</summary><p>${escapeHtml((gate.issues || []).join('；') || '没有可显示的阻断原因，请重新验收。')}</p></details>
+          </div>`;
         } else if (p.isDefault || p.id === ProjectPlatform.DEFAULT_ID) {
           badge = '<span class="pc-badge is-demo">展示样例</span>';
         } else if (
@@ -5626,17 +5721,15 @@
             ? `<button type="button" data-retry-project="${p.id}">重新生成</button>`
             : '';
         const continueBtn =
-          p.packStatus === 'partial' &&
-          p.packId &&
+          (p.packStatus === 'partial' || p.pendingPackStatus === 'partial') &&
+          (p.packId || p.pendingPackId) &&
           !(typeof GenDock !== 'undefined' && GenDock.isBusy?.() && GenDock.getActiveProjectId?.() === p.id)
             ? `<button type="button" data-continue-project="${p.id}">继续补全</button>`
             : '';
         const stopBtn =
-          p.packStatus === 'generating' ||
-          (p.packStatus === 'partial' &&
-            typeof GenDock !== 'undefined' &&
-            GenDock.isBusy?.() &&
-            GenDock.getActiveProjectId?.() === p.id)
+          typeof GenDock !== 'undefined' &&
+          GenDock.isBusy?.() &&
+          GenDock.getActiveProjectId?.() === p.id
             ? `<button type="button" data-stop-project="${p.id}">停止生成</button>`
             : '';
         const hubBtn = (() => {
@@ -5649,12 +5742,18 @@
             return '';
           }
           if (!p.packId || p.isDefault || (typeof ContentPack !== 'undefined' && ContentPack.isBuiltinPackId?.(p.packId))) return '';
-          if (p.packStatus === 'needs_review' || cardPack?.meta?.quality?.needsReview) {
-            return `<button type="button" data-hub-project="${p.id}">修复课包</button>`;
+          if (needsAttention) {
+            const repairControl = qualityPack?.meta?.quality?.repairControl;
+            const noProgress = repairControl?.status === 'no_change' && repairControl?.attemptType === 'manual_targeted';
+            return `<button type="button" data-hub-project="${p.id}" ${noProgress ? 'disabled title="相同修复未产生变化"' : ''}>重新生成问题部分</button>`;
           }
           if (cardPack?.hub?.navigation?.length) return '';
           return `<button type="button" data-hub-project="${p.id}">生成日课与核心术语</button>`;
         })();
+        const qualityActions = needsAttention
+          ? `<button type="button" data-open-project="${p.id}">继续使用当前内容</button>
+             <button type="button" data-regenerate-project="${p.id}">重新生成整个课包</button>`
+          : '';
         const matsBtn = (() => {
           if (
             p.packStatus === 'generating' ||
@@ -5699,6 +5798,7 @@
               ${continueBtn}
               ${retryBtn}
               ${hubBtn}
+              ${qualityActions}
               ${matsBtn}
               <button type="button" class="pc-del" data-delete-project="${p.id}">删除</button>
             </div>
@@ -6234,7 +6334,12 @@
     /** 把生成链路内部错误转成用户可理解的提示，避免露出开发侧术语。 */
     function friendlyGenError(err, fallback = '未知错误') {
       const code = err?.code || '';
-      const raw = String(err?.message || fallback);
+      const raw = typeof AiReview !== 'undefined' && AiReview.redactSensitive
+        ? AiReview.redactSensitive(err?.message || fallback)
+        : String(err?.message || fallback);
+      if (code === 'AUTH') return 'API Key 无效或已失效，请更新密钥后继续';
+      if (code === 'BALANCE' || code === 'BILLING') return 'API 余额不足或账户欠费，请充值后继续';
+      if (code === 'NETWORK') return '网络连接中断，现有结果已保存，可联网后继续';
       if (code === 'NO_KEY' || /未配置|API.?Key|密钥/i.test(raw)) {
         return '请先开启智能功能并填写 DeepSeek 密钥';
       }
@@ -6250,8 +6355,11 @@
       if (code === 'UPSTREAM_TIMEOUT') {
         return '单次 AI 响应超时，已保存的内容不会丢失，请点「继续补全」';
       }
+      if (code === 'REPAIR_NO_PROGRESS') {
+        return '相同修复没有产生变化，请查看失败原因，或重新生成问题部分/整个课包';
+      }
       if (code === 'GLOSSARY_QUALITY' || /术语库质量未达标|合格术语|可视化类型/i.test(raw)) {
-        return '核心术语尚未达到可用标准，请再点「修复课包」重试';
+        return '核心术语检查未通过；不影响其他已就绪内容，可查看原因或重新生成问题部分';
       }
       if (code === 'WALL_CLOCK') return '本次生成达到总时长上限，请点「继续补全」';
       if (code === 'TOOL_BUDGET' || code === 'WORKFLOW_BUDGET') {
@@ -6264,7 +6372,7 @@
         return '当前无法完成这项生成，请稍后重试';
       }
       if (/质量门|Harness|Evaluator|Sprint|Contract|门禁|假绿|浅文/i.test(raw)) {
-        return '部分内容尚未通过质量门，请点「修复课包」重试';
+        return '部分内容尚未通过结构检查，请查看具体原因并选择下一步';
       }
       return raw || fallback;
     }
@@ -6312,16 +6420,16 @@
             (!pack.meta?.quality?.finalGatePassed
               ? `课包主体已生成，但仍有定点问题待处理${
                   finalIssueSummary ? `：${finalIssueSummary}` : ''
-                }。请点击「修复课包」，系统只处理对应 Day。`
+                }。请点击「重新生成问题部分」，系统只处理对应 Day。`
               : '课表与日课已全部就绪。可继续浏览，或点「打开路径」开始学习。') +
             packPerformanceSummary(pack),
           projectId: project.id,
         });
       } catch (err) {
-        console.error(err);
+        console.error('[PackWorkflow] generation failed', err?.code || 'UNKNOWN', friendlyGenError(err));
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           const cur = ProjectPlatform.get(project.id);
-          if (cur?.packStatus === 'partial' && cur.packId) {
+          if ((cur?.packStatus === 'partial' || cur?.pendingPackStatus === 'partial') && (cur.packId || cur.pendingPackId)) {
             GenDock.finishCancelled(
               '已停止补全。前几天仍可学习，需要时点「继续补全」。',
               { keepOpenProjectId: project.id }
@@ -6334,7 +6442,7 @@
           return;
         }
         const cur = ProjectPlatform.get(project.id);
-        if (cur?.packStatus === 'partial' && cur.packId) {
+        if ((cur?.packStatus === 'partial' || cur?.pendingPackStatus === 'partial') && (cur.packId || cur.pendingPackId)) {
           GenDock.finishError(
             '补全未完成：' + friendlyGenError(err) + '。前几天仍可学，可点「继续补全」。',
             { canResume: true }
@@ -6344,7 +6452,7 @@
         }
         GenDock.finishError('生成失败：' + friendlyGenError(err));
         renderProjectsHome();
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
+        if (['NO_KEY', 'NO_PROXY', 'AUTH'].includes(err.code)) {
           AiReview.openSettingsModal?.();
         }
       }
@@ -6361,7 +6469,7 @@
       GenDock.start(`补全「${project.title || '学习路径'}」`, project.id);
       GenDock.markSkeletonReady(
         project.id,
-        Number(ContentPack.load(project.packId)?.meta?.generation?.readyThroughDay) || 0
+        Number(ContentPack.load(project.pendingPackId || project.packId)?.meta?.generation?.readyThroughDay) || 0
       );
       try {
         const pack = await PackWorkflow.resume(project, {
@@ -6385,12 +6493,12 @@
           message:
             (pack.meta?.quality?.finalGatePassed
               ? '其余课表已补全，全部就绪。'
-              : '补全已完成，自动修复后仍有内容未通过质量门，可点「修复课包」。') +
+              : '补全已完成，自动修复后仍有内容未通过质量门，可点「重新生成问题部分」。') +
             packPerformanceSummary(pack),
           projectId: project.id,
         });
       } catch (err) {
-        console.error(err);
+        console.error('[PackWorkflow] resume failed', err?.code || 'UNKNOWN', friendlyGenError(err));
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           GenDock.finishCancelled('已停止补全。前几天仍可学习。', {
             keepOpenProjectId: project.id,
@@ -6400,7 +6508,7 @@
         }
         GenDock.finishError('继续补全失败：' + friendlyGenError(err), { canResume: true });
         renderProjectsHome();
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
+        if (['NO_KEY', 'NO_PROXY', 'AUTH'].includes(err.code)) {
           AiReview.openSettingsModal?.();
         }
       }
@@ -6420,9 +6528,10 @@
         GenDock.setExpanded(true);
         return;
       }
-      const repairing = project.packStatus === 'needs_review';
-      GenDock.start(repairing ? '修复课包' : '生成日课与核心术语', project.id);
-      setGenProgress(repairing ? '正在按质量门原因修复课包…' : '准备生成日课与核心术语…', 2);
+      const repairing =
+        project.packStatus === 'needs_review' || project.pendingPackStatus === 'needs_review';
+      GenDock.start(repairing ? '重新生成问题部分' : '生成日课与核心术语', project.id);
+      setGenProgress(repairing ? '正在按质量检查原因重新生成问题部分…' : '准备生成日课与核心术语…', 2);
       try {
         const updatedPack = await PackWorkflow.repairHub(project, {
           onProgress: setGenProgress,
@@ -6431,19 +6540,19 @@
         renderProjectsHome();
         GenDock.finishOk({
           message: needsReview
-            ? '修复后仍有内容未通过质量门，可再次点击「修复课包」。'
+            ? '问题部分仍未通过检查。相同修复不会重复执行；可查看失败原因、继续使用当前内容，或重新生成整个课包。'
             : '日课与核心术语已更新。进入路径后打开「日课 / 术语库」查看。',
           projectId: project.id,
         });
       } catch (err) {
-        console.error(err);
+        console.error('[PackWorkflow] repair failed', err?.code || 'UNKNOWN', friendlyGenError(err));
         renderProjectsHome();
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           GenDock.finishCancelled('已停止生成日课与核心术语。');
           return;
         }
-        GenDock.finishError((repairing ? '修复课包失败：' : '生成日课与核心术语失败：') + friendlyGenError(err));
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
+        GenDock.finishError((repairing ? '重新生成问题部分失败：' : '生成日课与核心术语失败：') + friendlyGenError(err));
+        if (['NO_KEY', 'NO_PROXY', 'AUTH'].includes(err.code)) {
           AiReview.openSettingsModal?.();
         }
       }
@@ -6467,18 +6576,18 @@
         GenDock.finishOk({
           message: updatedPack?.meta?.quality?.finalGatePassed
             ? '每日练习已就绪。进入路径后打开任意一天即可看到。'
-            : '每日练习已更新，仍有内容未通过质量门，可点「修复课包」。',
+            : '每日练习已更新，仍有内容未通过质量检查，可查看原因并重新生成问题部分。',
           projectId: project.id,
         });
       } catch (err) {
-        console.error(err);
+        console.error('[PackWorkflow] materials failed', err?.code || 'UNKNOWN', friendlyGenError(err));
         renderProjectsHome();
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           GenDock.finishCancelled('已停止生成每日练习。');
           return;
         }
         GenDock.finishError('生成每日练习失败：' + friendlyGenError(err));
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') {
+        if (['NO_KEY', 'NO_PROXY', 'AUTH'].includes(err.code)) {
           AiReview.openSettingsModal?.();
         }
       }
@@ -6510,7 +6619,7 @@
           projectId: project.id,
         });
       } catch (err) {
-        console.error(err);
+        console.error('[PackWorkflow] glossary failed', err?.code || 'UNKNOWN', friendlyGenError(err));
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           GenDock.finishCancelled(`已停止生成 Day ${targetDay} 术语。`);
           return;
@@ -6520,7 +6629,7 @@
             ? '本课术语这次未达到可用标准，请再试一次'
             : friendlyGenError(err);
         GenDock.finishError('生成本课术语失败：' + message);
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') AiReview.openSettingsModal?.();
+        if (['NO_KEY', 'NO_PROXY', 'AUTH'].includes(err.code)) AiReview.openSettingsModal?.();
       }
     }
 
@@ -6588,7 +6697,7 @@
         GenDock.finishOk({ message: resultMessage, projectId: project.id });
         switchView('glossary');
       } catch (err) {
-        console.error(err);
+        console.error('[PackWorkflow] glossary failed', err?.code || 'UNKNOWN', friendlyGenError(err));
         if (err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err)) {
           if (status) status.textContent = '已停止，可再次点击继续扫描';
           GenDock.finishCancelled('已停止补充术语库，可随时重试。');
@@ -6597,7 +6706,7 @@
         const message = friendlyGenError(err);
         if (status) status.textContent = `补充失败：${message}，可重试`;
         GenDock.finishError('补充术语库失败：' + message);
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') AiReview.openSettingsModal?.();
+        if (['NO_KEY', 'NO_PROXY', 'AUTH'].includes(err.code)) AiReview.openSettingsModal?.();
       } finally {
         if (button) button.disabled = false;
       }
@@ -6642,7 +6751,7 @@
         });
         if (frame) switchView('glossary', `/glossary/${encodeURIComponent(term)}`);
       } catch (err) {
-        console.error(err);
+        console.error('[PackWorkflow] glossary failed', err?.code || 'UNKNOWN', friendlyGenError(err));
         const cancelled =
           err?.name === 'AbortError' || err?.code === 'ABORTED' || PackGenerator.isAbortError?.(err);
         const message =
@@ -6655,7 +6764,7 @@
           return;
         }
         GenDock.finishError('添加术语失败：' + message);
-        if (err.code === 'NO_KEY' || err.code === 'NO_PROXY') AiReview.openSettingsModal?.();
+        if (['NO_KEY', 'NO_PROXY', 'AUTH'].includes(err.code)) AiReview.openSettingsModal?.();
       }
     }
 
@@ -6752,7 +6861,9 @@
                 : '';
           const packId = packIdRaw ? encodeURIComponent(packIdRaw) : '';
           const packQ = packId ? `&packId=${packId}` : '';
-          const target = `hub/index.html?embed=1${packQ}&v=${HUB_CACHE_VER}&t=${bust}#${hash}`;
+          const projectQ = activeProject?.id ? `&projectId=${encodeURIComponent(activeProject.id)}` : '';
+          const dayQ = `&day=${encodeURIComponent(appData.currentViewDay)}&date=${encodeURIComponent(formatDateISO(getDateForDay(appData.currentViewDay)))}`;
+          const target = `hub/index.html?embed=1${packQ}${projectQ}${dayQ}&v=${HUB_CACHE_VER}&t=${bust}#${hash}`;
           requestAnimationFrame(() => {
             frame.src = 'about:blank';
             requestAnimationFrame(() => {
@@ -6815,7 +6926,22 @@
           return;
         }
         const data = event.data;
-        if (!data || data.type !== 'zhijing:glossary:add') return;
+        if (!data) return;
+        if (data.type === 'zhijing:checklist:set') {
+          if (String(data.projectId || '') !== String(activeProject?.id || '')) return;
+          const scope = DailyLearningState.scopeKey(data.projectId, data.date, data.day);
+          const changed = DailyLearningState.setTaskDone(
+            appData.dailyTaskState,
+            scope,
+            String(data.itemId || ''),
+            !!data.done
+          );
+          if (!changed) return;
+          saveData();
+          updateCheckinHintUI();
+          return;
+        }
+        if (data.type !== 'zhijing:glossary:add') return;
         if (String(data.packId || '') !== String(activeProject?.packId || '')) return;
         const term = String(data.term || '').trim();
         if (!term) return;
@@ -6845,6 +6971,14 @@
           e.preventDefault();
           e.stopPropagation();
           retryGeneratePack(retry.getAttribute('data-retry-project'));
+          return;
+        }
+        const regenerate = e.target.closest('[data-regenerate-project]');
+        if (regenerate) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!confirm('重新生成整个课包？当前可用版本会保留，只有新版本通过检查后才会替换。')) return;
+          retryGeneratePack(regenerate.getAttribute('data-regenerate-project'));
           return;
         }
         const cont = e.target.closest('[data-continue-project]');
@@ -7004,6 +7138,51 @@
         if (!link) return;
         e.preventDefault();
         switchView('hub', `/doc/${link.dataset.hubSlug}`);
+      });
+
+      const taskList = document.getElementById('view-tasks');
+      taskList?.addEventListener('change', (e) => {
+        if (e.target.dataset.action !== 'toggle-task') return;
+        const item = e.target.closest('[data-task-id]');
+        if (!item) return;
+        const scope = taskScopeForDay(appData.currentViewDay);
+        const changed = DailyLearningState.setTaskDone(
+          appData.dailyTaskState,
+          scope,
+          item.dataset.taskId,
+          e.target.checked
+        );
+        item.classList.toggle('done', e.target.checked);
+        if (!changed) return;
+        saveData();
+        updateCheckinHintUI();
+      });
+      taskList?.addEventListener('click', (e) => {
+        const hubLink = e.target.closest('[data-hub-slug]');
+        if (hubLink) {
+          e.preventDefault();
+          switchView('hub', `/doc/${hubLink.dataset.hubSlug}`);
+          return;
+        }
+        const action = e.target.dataset.action;
+        if (action === 'task-open-lesson') {
+          const first = ContentPack.getHubChaptersForDay?.(appData.currentViewDay)?.[0];
+          switchView('hub', first?.slug ? `/doc/${first.slug}` : '/');
+          return;
+        }
+        if (action === 'task-standard') {
+          document.getElementById('practice-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          const firstRubric = document.querySelector('#practice-list [data-action="toggle-rubric"]');
+          if (firstRubric && !firstRubric.closest('.practice-item')?.classList.contains('rubric-open')) firstRubric.click();
+          return;
+        }
+        if (action === 'task-feedback') {
+          document.getElementById('practice-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          const firstPractice = document.querySelector('#practice-list .practice-item');
+          const expand = firstPractice?.querySelector('[data-action="toggle-expand"]');
+          if (expand && !firstPractice.classList.contains('expanded')) expand.click();
+          firstPractice?.querySelector('.practice-answer')?.focus();
+        }
       });
 
       document.getElementById('btn-prev').addEventListener('click', () => {

@@ -1,7 +1,7 @@
 {
   "name": "zhijing",
   "productName": "知径",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "岗位方向学习路径 · 按天打卡",
   "author": {
     "name": "知径",
@@ -15,7 +15,8 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis",
     "dist:portable": "electron-builder --win portable",
-    "dist:mac": "electron-builder --mac dmg zip --publish never"
+    "dist:mac": "electron-builder --mac dmg zip --publish never",
+    "dist:mac:internal": "electron-builder --mac dmg zip --universal --publish never -c.mac.identity=null -c.mac.notarize=false -c.mac.hardenedRuntime=false"
   },
   "build": {
     "appId": "com.zhijing.app",
@@ -71,20 +72,23 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64"
+            "universal"
           ]
         },
         {
           "target": "zip",
           "arch": [
-            "arm64"
+            "universal"
           ]
         }
       ],
       "artifactName": "Zhijing-${version}-mac-${arch}.${ext}",
-      "identity": null,
-      "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": true,
+      "minimumSystemVersion": "12.0",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist"
     },
     "dmg": {
       "title": "Zhijing ${version}",

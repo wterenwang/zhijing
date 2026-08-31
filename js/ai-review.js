@@ -70,6 +70,18 @@ const AiReview = {
     return key.slice(0, 4) + '••••' + key.slice(-4);
   },
 
+  redactSensitive(value) {
+    let text = typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
+    text = text
+      .replace(/\b(?:sk|ds|api)[-_][A-Za-z0-9._-]{8,}\b/gi, '[REDACTED]')
+      .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s;,]+/gi, '$1[REDACTED]')
+      .replace(/(bearer\s+)[A-Za-z0-9._-]{8,}/gi, '$1[REDACTED]')
+      .replace(/((?:api[_-]?key|token|secret)\s*[:=]\s*["']?)[^\s,;"']+/gi, '$1[REDACTED]');
+    const currentKey = typeof AiReview.getApiKey === 'function' ? AiReview.getApiKey() : '';
+    if (currentKey && currentKey.length >= 8) text = text.split(currentKey).join('[REDACTED]');
+    return text;
+  },
+
   async checkProxy() {
     try {
       const res = await fetch('/api/deepseek/health', { method: 'GET' });
@@ -106,7 +118,9 @@ const AiReview = {
   },
 
   normalizeUpstreamError(status, message) {
-    const raw = typeof message === 'string' ? message : message ? JSON.stringify(message) : '';
+    const raw = AiReview.redactSensitive(
+      typeof message === 'string' ? message : message ? JSON.stringify(message) : ''
+    );
     const proxyHint = AiReview.proxyErrorMessage(status);
     if (proxyHint) {
       const err = new Error(proxyHint);
@@ -118,6 +132,38 @@ const AiReview = {
       const err = new Error('AI 服务当前繁忙，请稍等片刻后点「重新生成」再试');
       err.status = status || 503;
       err.code = 'SERVICE_BUSY';
+      return err;
+    }
+    if (status === 401 || status === 403 || /invalid.*(?:api[_ -]?key|token)|unauthori[sz]ed|authentication/i.test(raw)) {
+      const err = new Error('API Key 无效或已失效，请在智能功能设置中更新后继续');
+      err.status = status || 401;
+      err.code = 'AUTH';
+      err.retryable = false;
+      err.nextAction = 'update_key';
+      return err;
+    }
+    if (status === 402 || /insufficient.*(?:balance|credit)|余额不足|欠费|payment required|quota exhausted/i.test(raw)) {
+      const err = new Error('API 余额不足或账户欠费，请充值后继续生成');
+      err.status = status || 402;
+      err.code = 'BALANCE';
+      err.retryable = false;
+      err.nextAction = 'top_up';
+      return err;
+    }
+    if ([408, 504].includes(Number(status)) || /request.*timeout|timed?\s*out|请求超时/i.test(raw)) {
+      const err = new Error('模型请求超时，已保留现有结果，可稍后继续');
+      err.status = status || 504;
+      err.code = 'UPSTREAM_TIMEOUT';
+      err.retryable = true;
+      err.nextAction = 'resume';
+      return err;
+    }
+    if (/fetch failed|network(?: error)?|econn(?:reset|refused)|enotfound|socket hang up|网络(?:连接)?(?:失败|中断)/i.test(raw)) {
+      const err = new Error('网络连接中断，已保留现有结果，可联网后继续');
+      err.status = status || 0;
+      err.code = 'NETWORK';
+      err.retryable = true;
+      err.nextAction = 'resume';
       return err;
     }
     const desktop = document.documentElement?.dataset?.zhijingDesktop === '1';
@@ -253,7 +299,12 @@ const AiReview = {
           throw err;
         }
         emitMetrics({ attempts: attempt, status: 'network-error' });
-        throw e;
+        const err = new Error('网络连接中断，已保留现有结果，可联网后继续');
+        err.code = 'NETWORK';
+        err.retryable = true;
+        err.nextAction = 'resume';
+        err.cause = AiReview.redactSensitive(e?.message || String(e));
+        throw err;
       } finally {
         clearTimeout(timeout);
         signal?.removeEventListener?.('abort', onCallerAbort);
