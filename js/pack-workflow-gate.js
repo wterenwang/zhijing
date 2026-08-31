@@ -140,7 +140,17 @@
   }
 
   function dayFinding(day, severity, code, message, target = 'lesson') {
-    return { day: Number(day), severity, code, message, target };
+    const blocking = severity === 'hard';
+    return {
+      day: Number(day),
+      severity,
+      code,
+      message,
+      target,
+      blocking,
+      impact: blocking ? '影响该日内容完整性，建议修复后学习' : '不影响正常学习，可稍后优化',
+      repairability: blocking ? 'auto_or_regenerate' : 'optional',
+    };
   }
 
   /** 唯一的逐日发布判定：只读取当前内容，不参考修复历史或优化代理指标。 */
@@ -176,8 +186,11 @@
     }
     if (!slug || !String(markdown || '').trim()) {
       findings.push(dayFinding(day, 'hard', 'lesson.chapter.missing', `Day ${day} 缺少正文`));
+    } else if (/本章正在后台准备中|<!--\s*zhijing:shallow\s*-->/.test(markdown)) {
+      findings.push(
+        dayFinding(day, 'hard', 'lesson.placeholder', `Day ${day} 仍是待生成占位内容`)
+      );
     } else if (
-      /本章正在后台准备中|<!--\s*zhijing:shallow\s*-->/.test(markdown) ||
       String(markdown).trim().length < lessonDepthFloor(day) ||
       (strictV2 &&
         (String(markdown).match(/^##\s+(?!来源|证据来源|Sources?)/gim) || []).length < 4)
@@ -304,10 +317,15 @@
       }
     }
 
-    const blockingFindings = findings.filter(
-      (finding) => finding.severity === 'hard' || finding.severity === 'floor'
-    );
-    return { day, passed: blockingFindings.length === 0, findings, blockingFindings };
+    const blockingFindings = findings.filter((finding) => finding.blocking);
+    const advisoryFindings = findings.filter((finding) => !finding.blocking);
+    return {
+      day,
+      passed: blockingFindings.length === 0,
+      findings,
+      blockingFindings,
+      advisoryFindings,
+    };
   }
 
   function optimizationFindingsFromQuality(quality = {}) {
@@ -330,6 +348,15 @@
     }
     if (quality.glossaryFromHub && Number(quality.glossaryHubHitRate) < 0.7) {
       add('course.glossary-hit-rate', '核心术语与正文覆盖关系可继续优化', 'glossaryHubHitRate', quality.glossaryHubHitRate);
+    }
+    if (quality.glossaryEnough === false) {
+      add('course.glossary-count', '核心术语数量低于建议目标，不影响开始学习', 'glossaryPassCount', quality.glossaryPassCount);
+    }
+    if (Number(quality.glossaryKindCount) < 2) {
+      add('course.glossary-variety', '术语展示类型较少，可稍后补充', 'glossaryKindCount', quality.glossaryKindCount);
+    }
+    if (quality.phaseMonotonic === false) {
+      add('course.phase-backjump', '检测到学习阶段回跳，请人工确认是否符合课程设计', 'phaseMonotonic', false);
     }
     return findings;
   }
@@ -493,8 +520,41 @@
     }
 
     const quality = pack?.meta?.quality || null;
+    const heuristicDayFindings = dayResults.flatMap((result) => result.advisoryFindings || []);
     const optimizationFindings = optimizationFindingsFromQuality(quality || {});
-    const optimizationSuggested = optimizationFindings.length > 0;
+    const courseAdvisories = [];
+    if (lowTrustSourceDays.length) {
+      courseAdvisories.push({
+        severity: 'advisory',
+        code: 'course.source-trust',
+        message: `${lowTrustSourceDays.length} 天只有上下文来源，建议补充权威资料`,
+        days: lowTrustSourceDays,
+        impact: '当前内容仍可学习，引用重要结论时应额外核验',
+        repairability: 'auto_or_manual',
+      });
+    }
+    if (backjumpDays.length) {
+      courseAdvisories.push({
+        severity: 'advisory',
+        code: 'course.phase-backjump',
+        message: `学习阶段在 ${backjumpDays.length} 天发生回跳，请确认是否符合设计`,
+        days: backjumpDays,
+        impact: '不影响内容访问',
+        repairability: 'manual_review',
+      });
+    }
+    if (!quality) {
+      courseAdvisories.push({
+        severity: 'advisory',
+        code: 'course.legacy-quality-metadata',
+        message: '这是旧版课包，尚无新版质量诊断记录',
+        impact: '结构完整时仍可学习',
+        repairability: 'recheck',
+      });
+    }
+    const advisoryFindings = [...heuristicDayFindings, ...optimizationFindings, ...courseAdvisories]
+      .filter((finding, index, rows) => rows.findIndex((row) => row.code === finding.code && Number(row.day || 0) === Number(finding.day || 0)) === index);
+    const optimizationSuggested = advisoryFindings.length > 0;
     // 当前内容决定能否发布；修复历史和优化代理指标仅用于诊断与后续改进。
     const harnessNeedsRepair = false;
     const issues = [];
@@ -514,7 +574,6 @@
     }
     if (emptyResourceDays.length) issues.push(`${emptyResourceDays.length} 天没有有效学习来源`);
     if (invalidSourceDays.length) issues.push(`${invalidSourceDays.length} 天的来源元数据无效`);
-    if (lowTrustSourceDays.length) issues.push(`${lowTrustSourceDays.length} 天只有低可信上下文来源`);
     if (missingInlineCitationDays.length) {
       issues.push(`${missingInlineCitationDays.length} 天的精确事实缺少正文引用`);
     }
@@ -531,16 +590,15 @@
     if (invalidExerciseDays.length) issues.push(`${invalidExerciseDays.length} 天的练习反馈契约不完整`);
     if (invalidTaskDays.length) issues.push(`${invalidTaskDays.length} 天的任务资料绑定无效`);
     if (missingCheckpointWeeks.length) issues.push(`${missingCheckpointWeeks.length} 周缺少累计作品`);
-    if (backjumpDays.length) issues.push(`学习阶段在 ${backjumpDays.length} 天发生回跳`);
-    if (qualityFloorDays.length) {
-      issues.push(`${qualityFloorDays.length} 天未达到可学习深度底线（Day ${qualityFloorDays.join(', ')}）`);
-    }
-    if (!quality) issues.push('尚未执行内容质量门禁');
-    else {
-      if (quality.glossaryEnough !== true) issues.push('合格术语不足 8 条');
-      if (Number(quality.glossaryKindCount) < 2) issues.push('术语可视化类型不足 2 种');
-      if (quality.phaseMonotonic === false) issues.push('学习阶段存在回跳');
-    }
+
+    const checks = [
+      { id: 'plan', label: '课表覆盖', passed: missingPlanDays.length === 0 },
+      { id: 'lessons', label: '日课正文', passed: missingHubDays.length === 0 && missingChapterSlugs.length === 0 && invalidLessonDays.length === 0 },
+      { id: 'exercises', label: '练习与反馈依据', passed: missingExerciseDays.length === 0 && invalidExerciseDays.length === 0 },
+      { id: 'sources', label: '来源与引用可回链', passed: missingResourceDays.length === 0 && emptyResourceDays.length === 0 && invalidSourceDays.length === 0 && missingCitationDays.length === 0 },
+      { id: 'tasks', label: '任务资料绑定', passed: invalidTaskDays.length === 0 },
+      { id: 'checkpoints', label: '阶段作品', passed: missingCheckpointWeeks.length === 0 },
+    ];
 
     return {
       passed: issues.length === 0,
@@ -569,6 +627,9 @@
       qualityFloorDays,
       dayResults,
       optimizationFindings,
+      advisoryFindings,
+      blockingFindings: dayResults.flatMap((result) => result.blockingFindings || []),
+      checks,
       optimizationSuggested,
       harnessNeedsRepair,
       issues,

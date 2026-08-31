@@ -1,12 +1,92 @@
 import { Link } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import { Children, isValidElement, cloneElement } from 'react'
+import { Children, isValidElement, cloneElement, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { glossaryMap, glossaryHref } from '../data/glossary'
 
 interface MarkdownContentProps {
   content: string
+}
+
+interface ChecklistContext {
+  projectId: string
+  date: string
+  day: number
+  scope: string
+}
+
+function hashText(value: string) {
+  let result = 2166136261
+  for (const char of value.trim()) {
+    result ^= char.charCodeAt(0)
+    result = Math.imul(result, 16777619)
+  }
+  return (result >>> 0).toString(36)
+}
+
+function checklistContext(): ChecklistContext {
+  const params = new URLSearchParams(window.location.search)
+  const projectId = params.get('projectId') || params.get('packId') || 'builtin'
+  const date = params.get('date') || 'undated'
+  const day = Number(params.get('day')) || 0
+  return { projectId, date, day, scope: `${projectId}::${date}::day-${day}` }
+}
+
+function ChecklistInput({ context, itemId, initial }: {
+  context: ChecklistContext
+  itemId: string
+  initial: boolean
+}) {
+  const storageKey = `learning-project-data:${context.projectId}`
+  const readStored = () => {
+    try {
+      const appData = JSON.parse(localStorage.getItem(storageKey) || '{}')
+      const bucket = appData?.dailyTaskState?.[context.scope]
+      return Object.prototype.hasOwnProperty.call(bucket || {}, itemId)
+        ? bucket[itemId] === true
+        : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const [done, setDone] = useState(() => readStored() ?? initial)
+
+  useEffect(() => {
+    setDone(readStored() ?? initial)
+  }, [context.scope, initial, itemId])
+
+  const update = (next: boolean) => {
+    setDone(next)
+    if (window.parent === window) {
+      try {
+        const appData = JSON.parse(localStorage.getItem(storageKey) || '{}')
+        appData.dailyTaskState = appData.dailyTaskState || {}
+        appData.dailyTaskState[context.scope] = appData.dailyTaskState[context.scope] || {}
+        appData.dailyTaskState[context.scope][itemId] = next
+        localStorage.setItem(storageKey, JSON.stringify(appData))
+      } catch {
+        // 独立打开 Hub 时，本地存储不可用不应阻断当前交互。
+      }
+    }
+    window.parent.postMessage({
+      type: 'zhijing:checklist:set',
+      projectId: context.projectId,
+      date: context.date,
+      day: context.day,
+      itemId,
+      done: next,
+    }, window.location.origin === 'null' ? '*' : window.location.origin)
+  }
+
+  return (
+    <input
+      type="checkbox"
+      checked={done}
+      onChange={(event) => update(event.target.checked)}
+      aria-label="完成清单项"
+    />
+  )
 }
 
 const TERM_PATTERN =
@@ -62,6 +142,23 @@ function withTerms(children: ReactNode, keyPrefix = ''): ReactNode {
 }
 
 export function MarkdownContent({ content }: MarkdownContentProps) {
+  const taskLines = useMemo(() => {
+    const rows = new Map<number, { itemId: string; initial: boolean }>()
+    let index = 0
+    content.split('\n').forEach((line, lineIndex) => {
+      const match = line.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/)
+      if (!match) return
+      const text = match[2].trim()
+      rows.set(lineIndex + 1, {
+        itemId: `lesson:${index}:${hashText(text)}`,
+        initial: match[1].toLowerCase() === 'x',
+      })
+      index += 1
+    })
+    return rows
+  }, [content])
+  const context = useMemo(checklistContext, [])
+
   return (
     <div className="prose-doc max-w-none">
       <ReactMarkdown
@@ -73,6 +170,19 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
           h4: ({ children }) => <h4>{withTerms(children)}</h4>,
           p: ({ children }) => <p>{withTerms(children)}</p>,
           li: ({ children }) => <li>{withTerms(children)}</li>,
+          input: ({ node, type, checked }) => {
+            if (type !== 'checkbox') return <input type={type} />
+            const info = taskLines.get(node?.position?.start.line || 0)
+            if (!info) return <input type="checkbox" checked={!!checked} readOnly />
+            return (
+              <ChecklistInput
+                key={`${context.scope}:${info.itemId}`}
+                context={context}
+                itemId={info.itemId}
+                initial={info.initial || !!checked}
+              />
+            )
+          },
           td: ({ children }) => <td>{withTerms(children)}</td>,
           th: ({ children }) => <th>{withTerms(children)}</th>,
           blockquote: ({ children }) => (

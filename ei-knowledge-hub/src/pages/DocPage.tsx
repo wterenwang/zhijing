@@ -24,7 +24,7 @@ export function DocPage() {
       <div>
         <h1 className="text-2xl font-bold mb-4">日课未生成</h1>
         <p className="text-slate-600 mb-4">
-          请返回路径列表，点「生成日课与核心术语」或「修复日课与核心术语」后再阅读章节。
+          请返回路径列表，点「生成日课与核心术语」或「重新生成问题部分」后再阅读章节。
         </p>
         <Link to="/" className="text-cyan-700 hover:underline">
           返回首页

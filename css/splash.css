@@ -35,6 +35,10 @@ body.splash-active .bg-grid {
   font-family: var(--font, "DM Sans", "Segoe UI", sans-serif);
 }
 
+.splash-gate[hidden] {
+  display: none !important;
+}
+
 .splash-visual {
   position: absolute;
   inset: 0;

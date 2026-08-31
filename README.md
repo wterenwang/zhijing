@@ -9,10 +9,10 @@
 知径会根据你的行业、岗位和目标，智能生成专属学习路径，<br />
 并陪你完成每天的任务、阅读、练习、复盘与打卡。
 
-[📥 下载最新版](https://github.com/wterenwang/zhijing/releases/latest) · [✨ 查看本次更新](https://github.com/wterenwang/zhijing/releases/tag/v1.2.0) · [💬 反馈问题](https://github.com/wterenwang/zhijing/issues)
+[📥 下载最新版](https://github.com/wterenwang/zhijing/releases/latest) · [✨ 查看本次更新](https://github.com/wterenwang/zhijing/releases/tag/v1.2.1) · [💬 反馈问题](https://github.com/wterenwang/zhijing/issues)
 
-![Version](https://img.shields.io/badge/版本-1.2.0-0891b2)
-![Platform](https://img.shields.io/badge/支持-Windows_x64%20%7C%20macOS_Apple芯片-111827)
+![Version](https://img.shields.io/badge/版本-1.2.1-0891b2)
+![Platform](https://img.shields.io/badge/支持-Windows_x64%20%7C%20macOS_Universal-111827)
 
 </div>
 
@@ -66,20 +66,14 @@
 
 前往 [📥 最新版本下载页](https://github.com/wterenwang/zhijing/releases/latest)：
 
-- **Windows x64**：下载 `Zhijing-Setup-1.2.0.exe`
-- **macOS Apple 芯片**：下载 `Zhijing-1.2.0-mac-arm64.dmg`
+- **Windows x64**：下载 `Zhijing-Setup-1.2.1.exe`
+- **macOS（Apple 芯片与 Intel）**：仅在发布页已提供 `Zhijing-1.2.1-mac-universal.dmg` 时下载。该文件必须经过 Developer ID 签名和 Apple 公证；如果发布页尚未提供，表示正式 macOS 产物仍在等待发布凭据。
 
 ### 2. 安装并打开
 
-Windows 运行安装程序，按提示完成安装。
+Windows 运行安装程序，按提示完成安装。当前 Windows 安装包尚未配置 Authenticode 代码签名，系统可能显示“未知发布者”提示；请只从本仓库 Release 下载，并核对发布说明中的 SHA-256。
 
-macOS 打开 DMG 后，将知径拖入“应用程序”。当前 macOS 版本尚未签名，如果系统阻止打开，请先右键应用并选择“打开”。仍提示损坏时，在终端执行：
-
-```bash
-xattr -cr "/Applications/知径.app"
-```
-
-> macOS 当前仅支持 Apple Silicon（M1 / M2 / M3 / M4 等），暂不支持 Intel Mac。
+macOS 打开正式 DMG 后，将知径拖入“应用程序”，再从“应用程序”中双击打开。正式包使用 Developer ID 签名并完成 Apple 公证，不需要终端命令或绕过系统安全检查。支持 Apple Silicon 与 Intel，最低为 macOS 12。
 
 ### 3. 配置 DeepSeek
 
@@ -93,16 +87,16 @@ xattr -cr "/Applications/知径.app"
 
 跟随任务、资料、练习、复盘和打卡完成当天内容。遇到不熟悉的概念，可以前往“日课”和“术语库”继续查看。
 
-## ✨ v1.2.0 有哪些变化
+## ✨ v1.2.1 有哪些变化
 
-- **课包更完整**：每天的任务、资料、正文和练习会互相对应。
-- **资料更好懂**：资源标题更通俗，减少机械文件名和无效链接。
-- **生成等待更少**：减少重复搜索，同一阶段的资料可以复用。
-- **中断后能继续**：刷新、关闭窗口或主动停止后，可从已有进度继续生成。
-- **局部问题局部修复**：某一天有问题时，只修复相关内容，不重做整个课包。
-- **“今天”页更清晰**：学习主线集中在一个页面，进度与日历一眼可见。
-- **复盘更顺手**：复述和笔记改为标签切换，完成练习后可以直接整理。
-- **指南同步更新**：九步使用指南已经适配新界面。
+- **质量状态更可信**：不再用“98%”等无依据百分比，直接说明通过项、失败原因、学习影响和下一步。
+- **修复不再无限循环**：无实际变化时停止重复修复，可以继续学习、重新生成问题部分或重新生成整个课包。
+- **中断后安全继续**：认证、余额、网络、超时和退出中断分别提示，已生成内容会保留并可继续补全。
+- **旧课包不会被新失败覆盖**：重新生成先使用候选包，只有通过结构验收后才替换当前可用课包。
+- **今日清单可持久保存**：支持勾选和取消，刷新、切换日期或重启后状态仍正确，且不同路径互不串联。
+- **长内容完整展示**：自检要点、参考内容和相邻长字段不再被解析或界面固定高度截断。
+- **任务学习引导**：任务内直接提供“怎么做、做成什么样、我做得怎么样”三段式帮助。
+- **诊断更安全清晰**：记录排队、生成、修复、重试和恢复结果，同时对 API Key 与敏感内容脱敏。
 
 查看完整记录：[📋 CHANGELOG.md](CHANGELOG.md)
 
@@ -132,9 +126,9 @@ xattr -cr "/Applications/知径.app"
 </details>
 
 <details>
-<summary><strong>为什么 macOS 提示无法验证开发者？</strong></summary>
+<summary><strong>为什么 macOS 仍提示无法验证开发者？</strong></summary>
 
-当前 macOS 安装包尚未进行 Apple 开发者签名。请右键应用选择“打开”，或按照上方安装说明清除隔离标记。
+请先确认发布页确实提供了文件名包含 `mac-universal` 的正式 DMG；没有该文件时，表示签名公证产物尚未发布。正式发布流程会在上传前验证签名、公证票据和 Gatekeeper。如果正式包仍被拦截，请不要执行绕过命令，改为在 Issues 中提供版本号和系统版本。
 
 </details>
 
@@ -183,7 +177,7 @@ npm run test:workflow   # 课包工作流回归测试
 npm run pack            # 生成 unpacked 桌面应用
 npm run dist            # 构建 Windows 安装包
 npm run dist:portable   # 构建 Windows 便携版
-npm run dist:mac        # 构建 macOS arm64 DMG + ZIP
+npm run dist:mac        # 在 macOS 上构建并签名、公证 Universal DMG + ZIP
 ```
 
 知识库前端位于 `ei-knowledge-hub/`：

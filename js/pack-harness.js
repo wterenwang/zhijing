@@ -156,6 +156,7 @@ const PackHarness = (() => {
         calls: 0,
         failures: 0,
         durationMs: 0,
+        queueMs: 0,
         retries: 0,
         promptTokens: 0,
         completionTokens: 0,
@@ -198,8 +199,12 @@ const PackHarness = (() => {
   /** 日志脱敏：截断大字段，避免把整章 markdown 写入 trace */
   function summarizeForLog(data) {
     try {
-      const s = JSON.stringify(data);
-      if (s.length <= 800) return data;
+      const redact = (value) => String(value)
+        .replace(/\b(?:sk|ds|api)[-_][A-Za-z0-9._-]{8,}\b/gi, '[REDACTED]')
+        .replace(/(bearer\s+)[^\s;,]+/gi, '$1[REDACTED]')
+        .replace(/((?:api[_-]?key|token|secret)\s*[:=]\s*["']?)[^\s,;"']+/gi, '$1[REDACTED]');
+      const s = redact(JSON.stringify(data));
+      if (s.length <= 800) return JSON.parse(s);
       return { _truncated: true, preview: s.slice(0, 600), len: s.length };
     } catch {
       return { _unserializable: true };
@@ -239,6 +244,7 @@ const PackHarness = (() => {
       calls: 1,
       failures: metrics.status && metrics.status !== 'ok' ? 1 : 0,
       durationMs: Math.max(0, Number(metrics.durationMs) || 0),
+      queueMs: Math.max(0, Number(metrics.queueMs) || 0),
       retries: Math.max(0, (Number(metrics.attempts) || 1) - 1),
       promptTokens: Math.max(0, Number(usage.prompt_tokens) || 0),
       completionTokens: Math.max(0, Number(usage.completion_tokens) || 0),
@@ -249,6 +255,7 @@ const PackHarness = (() => {
       calls: 0,
       failures: 0,
       durationMs: 0,
+      queueMs: 0,
       retries: 0,
       promptTokens: 0,
       completionTokens: 0,
@@ -263,6 +270,7 @@ const PackHarness = (() => {
     span('ai.complete', {
       stage,
       durationMs: values.durationMs,
+      queueMs: values.queueMs,
       attempts: values.retries + 1,
       promptTokens: values.promptTokens,
       completionTokens: values.completionTokens,

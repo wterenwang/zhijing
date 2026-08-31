@@ -56,6 +56,18 @@ async function readJson(req) {
   return JSON.parse(raw);
 }
 
+function redactSensitive(value) {
+  return String(value == null ? '' : value)
+    .replace(/\b(?:sk|ds|api)[-_][A-Za-z0-9._-]{8,}\b/gi, '[REDACTED]')
+    .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s;,]+/gi, '$1[REDACTED]')
+    .replace(/(bearer\s+)[^\s;,]+/gi, '$1[REDACTED]')
+    .replace(/((?:api[_-]?key|token|secret)\s*[:=]\s*["']?)[^\s,;"']+/gi, '$1[REDACTED]');
+}
+
+function safeErrorPayload(error) {
+  return { error: { message: redactSensitive(error?.message || String(error || '未知错误')) } };
+}
+
 function requestAbortSignal(req, res) {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -121,7 +133,7 @@ async function proxyDeepseek(payload, signal) {
   if (!res.ok) {
     const err = new Error(data?.error?.message || text || res.statusText);
     err.status = res.status;
-    err.body = data;
+    err.body = safeErrorPayload(err);
     throw err;
   }
   return data;
@@ -471,7 +483,7 @@ async function resolveMetadataUrl(rawUrl, signal) {
       publisher: '',
       provider: gh ? 'github-rest' : 'html',
       degraded: true,
-      error: error.name === 'AbortError' ? 'timeout' : String(error.message || error),
+      error: error.name === 'AbortError' ? 'timeout' : redactSensitive(error.message || error),
     };
   }
 }
@@ -569,7 +581,7 @@ function createServer(rootDir, port) {
           sendJson(res, 200, data);
         } catch (e) {
           if (signal.aborted || res.destroyed) return;
-          sendJson(res, e.status || 500, e.body || { error: { message: e.message || String(e) } });
+          sendJson(res, e.status || 500, e.body || safeErrorPayload(e));
         }
         return;
       }
@@ -598,7 +610,7 @@ function createServer(rootDir, port) {
           });
         } catch (e) {
           if (signal.aborted || res.destroyed) return;
-          sendJson(res, e.status || 500, { error: { message: e.message || String(e) } });
+          sendJson(res, e.status || 500, safeErrorPayload(e));
         }
         return;
       }
@@ -611,7 +623,7 @@ function createServer(rootDir, port) {
           sendJson(res, 200, { provider: 'local-metadata', ...data });
         } catch (e) {
           if (signal.aborted || res.destroyed) return;
-          sendJson(res, e.status || 500, { error: { message: e.message || String(e) } });
+          sendJson(res, e.status || 500, safeErrorPayload(e));
         }
         return;
       }
@@ -662,7 +674,7 @@ function createServer(rootDir, port) {
       res.writeHead(200, headers);
       res.end(req.method === 'HEAD' ? undefined : data);
     } catch (e) {
-      sendJson(res, 500, { error: { message: e.message || String(e) } });
+      sendJson(res, 500, safeErrorPayload(e));
     }
   });
 
@@ -706,5 +718,7 @@ module.exports = {
     resolveMetadataUrl,
     resolveMetadataBatch,
     htmlMeta,
+    redactSensitive,
+    safeErrorPayload,
   },
 };

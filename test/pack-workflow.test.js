@@ -13,6 +13,13 @@ const recoveryApi = require('../js/pack-workflow-recovery');
 const taskResourceBinder = require('../js/task-resource-binder');
 global.TaskResourceBinder = taskResourceBinder;
 
+let dailyLearningState = null;
+try {
+  dailyLearningState = require('../js/daily-learning-state');
+} catch {
+  // TDD seam: the first red run proves this behavior does not exist yet.
+}
+
 function loadPackHarness() {
   const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'pack-harness.js'), 'utf8');
   const context = vm.createContext({ console, URL });
@@ -346,12 +353,13 @@ test('最终门禁拒绝没有真实来源绑定的具名阅读任务', () => {
   assert.ok(result.findings.some((finding) => finding.code === 'task.reference.invalid'));
 });
 
-test('最终门禁拒绝只有 contextual 来源的日课', () => {
+test('只有 contextual 来源时允许学习并给出可解释的改进建议', () => {
   const pack = completeV2Pack('pack-contextual-only');
   pack.dayResources[1].resources[0].sourceTier = 'contextual';
   const result = gateApi.evaluateDay(pack, 1);
-  assert.equal(result.passed, false);
+  assert.equal(result.passed, true);
   assert.ok(result.findings.some((finding) => finding.code === 'source.quality.floor'));
+  assert.ok(result.advisoryFindings.some((finding) => finding.code === 'source.quality.floor'));
 });
 
 test('微批次在逐日验收前会把任务重绑到实际日课章节', () => {
@@ -521,6 +529,7 @@ test('Harness 按阶段聚合 AI 耗时、重试、token 与缓存命中', () =>
   harness.recordAiCall({
     stage: 'hub.write',
     durationMs: 1200,
+    queueMs: 75,
     attempts: 2,
     usage: {
       prompt_tokens: 800,
@@ -538,6 +547,7 @@ test('Harness 按阶段聚合 AI 耗时、重试、token 与缓存命中', () =>
   const metrics = harness.snapshot().aiMetrics;
   assert.equal(metrics.calls, 2);
   assert.equal(metrics.durationMs, 2000);
+  assert.equal(metrics.queueMs, 75);
   assert.equal(metrics.retries, 1);
   assert.equal(metrics.promptTokens, 1300);
   assert.equal(metrics.completionTokens, 700);
@@ -588,6 +598,51 @@ test('AiReview 保持文本返回并通过回调暴露非敏感 usage 指标', a
   assert.equal(received.attempts, 1);
   assert.equal(received.usage.prompt_cache_hit_tokens, 70);
   assert.ok(received.durationMs >= 0);
+});
+
+test('AiReview 区分认证、余额、网络和超时并统一脱敏', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'ai-review.js'), 'utf8');
+  const secret = 'sk-very-secret-value-1234567890';
+  const context = vm.createContext({
+    console,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+    localStorage: {
+      getItem: () => secret,
+      setItem: () => {},
+      removeItem: () => {},
+    },
+    document: { documentElement: { dataset: {} } },
+    fetch: async () => {
+      throw new TypeError(`fetch failed for Bearer ${secret}`);
+    },
+  });
+  vm.runInContext(`${source}\n;globalThis.__AiReview = AiReview;`, context);
+  const ai = context.__AiReview;
+  assert.equal(ai.normalizeUpstreamError(401, 'invalid api key').code, 'AUTH');
+  assert.equal(ai.normalizeUpstreamError(402, 'insufficient balance').code, 'BALANCE');
+  assert.equal(ai.normalizeUpstreamError(504, 'request timeout').code, 'UPSTREAM_TIMEOUT');
+  assert.equal(ai.normalizeUpstreamError(500, 'fetch failed').code, 'NETWORK');
+  const sanitized = ai.redactSensitive(`Authorization: Bearer ${secret}; apiKey=${secret}`);
+  assert.doesNotMatch(sanitized, new RegExp(secret));
+  assert.match(sanitized, /\[REDACTED\]/);
+
+  ai.checkProxy = async () => ({ ok: true });
+  await assert.rejects(
+    ai.chat({ messages: [{ role: 'user', content: 'network' }], timeoutMs: 50 }),
+    (error) => error.code === 'NETWORK' && !String(error.message).includes(secret)
+  );
+});
+
+test('桌面代理返回上游错误前会移除完整 API Key', () => {
+  const server = require('../electron/server');
+  const secret = 'sk-server-secret-1234567890';
+  const payload = server._test.safeErrorPayload(
+    new Error(`Authorization: Bearer ${secret}; apiKey=${secret}`)
+  );
+  assert.doesNotMatch(JSON.stringify(payload), new RegExp(secret));
+  assert.match(payload.error.message, /\[REDACTED\]/);
 });
 
 test('JSON Output 只显式透传 json_object 且两种本地代理保持一致', async () => {
@@ -1111,7 +1166,13 @@ test('多次生成与修复会累计非敏感性能指标而不覆盖前序会�
   );
   const context = vm.createContext({ console });
   vm.runInContext(`${source}\n;globalThis.__PackGenerator = PackGenerator;`, context);
-  const pack = { meta: {} };
+  const pack = {
+    meta: {
+      performance: {
+        workflowRuns: [{ operation: 'resume', success: true }],
+      },
+    },
+  };
   context.__PackGenerator._test.storeHarnessSnapshot(pack, {
     traceId: 'trace-1',
     startedAt: 1,
@@ -1142,8 +1203,24 @@ test('多次生成与修复会累计非敏感性能指标而不覆盖前序会�
   assert.equal(pack.meta.performance.aiMetrics.durationMs, 120);
   assert.equal(pack.meta.performance.aiMetrics.promptTokens, 120);
   assert.equal(pack.meta.performance.sessions.length, 2);
+  assert.equal(pack.meta.performance.workflowRuns.length, 1);
+  assert.equal(pack.meta.performance.workflowRuns[0].operation, 'resume');
   assert.equal(pack.meta.performance.aiMetrics.stages['hub.write'].calls, 2);
   assert.equal(pack.meta.performance.aiMetrics.stages['glossary.core'].calls, 1);
+});
+
+test('知识库生成失败时保存诊断快照后再向上抛错', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'js', 'pack-generator.js'),
+    'utf8'
+  );
+  const start = source.indexOf('async function generateHubForPack');
+  const end = source.indexOf('/** P3：为已有内容包补全每日外链与练习 */', start);
+  const section = source.slice(start, end);
+
+  assert.match(section, /catch \(error\)[\s\S]*PackHarness\.snapshot\(\)/);
+  assert.match(section, /catch \(error\)[\s\S]*storeHarnessSnapshot\(pack, snap\)/);
+  assert.match(section, /catch \(error\)[\s\S]*ContentPack\.save\(pack\)[\s\S]*throw error/);
 });
 
 function dependencies({ generator, harness } = {}) {
@@ -1203,6 +1280,12 @@ test('完整生成只由最终门禁进入 ready', async () => {
   assert.equal(result.meta.quality.finalGatePassed, true);
   assert.equal(deps.projects.get('project-1').packStatus, 'ready');
   assert.equal(deps.packs.get(pack.id).status, 'ready');
+  const workflowRun = result.meta.performance.workflowRuns.at(-1);
+  assert.equal(workflowRun.operation, 'full');
+  assert.equal(workflowRun.success, true);
+  assert.equal(typeof workflowRun.generationMs, 'number');
+  assert.equal(typeof workflowRun.repairMs, 'number');
+  assert.equal(workflowRun.recoveryAttempted, false);
 });
 
 test('完整生成首次未过最终门时自动修复并重新验收', async () => {
@@ -1237,6 +1320,31 @@ test('完整生成首次未过最终门时自动修复并重新验收', async ()
   assert.ok(progress.includes('正在自动修复最终质量问题…'));
 });
 
+test('自动修复遇到网络故障时进入可恢复失败而不是伪装成功', async () => {
+  const incomplete = completePack('pack-auto-repair-network');
+  delete incomplete.hub.chapters['module-1/day-07'];
+  const deps = dependencies({
+    generator: {
+      async generate(_meta, _progress, options) {
+        options.onSkeletonReady(incomplete);
+        return incomplete;
+      },
+      async repairFinalGateForPack() {
+        throw Object.assign(new Error('network unavailable'), { code: 'NETWORK' });
+      },
+    },
+  });
+  const workflow = createPackWorkflow(deps);
+  await assert.rejects(
+    workflow.start(deps.projects.get('project-1')),
+    (error) => error?.code === 'NETWORK'
+  );
+  const failed = deps.packs.get(incomplete.id);
+  assert.equal(failed.meta.performance.workflowRuns.at(-1).success, false);
+  assert.equal(failed.meta.performance.workflowRuns.at(-1).failureType, 'network');
+  assert.equal(failed.meta.generation.lastFailure.resumable, true);
+});
+
 test('手动修复课包会按当前最终门问题执行综合修复', async () => {
   const incomplete = completeV2Pack('pack-manual-repair');
   incomplete.dayResources[4] = { resources: [] };
@@ -1262,6 +1370,31 @@ test('手动修复课包会按当前最终门问题执行综合修复', async ()
   assert.deepEqual(receivedGate.emptyResourceDays, [4]);
   assert.equal(receivedGate.missingResourceDays.length, 0);
   assert.equal(deps.projects.get('project-1').packStatus, 'ready');
+});
+
+test('手动修复没有改变内容或问题时禁止无限重复同一种修复', async () => {
+  const incomplete = completeV2Pack('pack-no-progress');
+  incomplete.dayResources[4] = { resources: [] };
+  let repairCalls = 0;
+  const deps = dependencies({
+    generator: {
+      async repairFinalGateForPack() {
+        repairCalls += 1;
+        return structuredClone(incomplete);
+      },
+    },
+  });
+  deps.contentPack.save(incomplete);
+  deps.projects.update('project-1', { packId: incomplete.id, packStatus: 'needs_review' });
+  const workflow = createPackWorkflow(deps);
+
+  const first = await workflow.repairHub(deps.projects.get('project-1'));
+  assert.equal(first.meta.quality.repairControl.status, 'no_change');
+  await assert.rejects(
+    workflow.repairHub(deps.projects.get('project-1')),
+    (error) => error.code === 'REPAIR_NO_PROGRESS'
+  );
+  assert.equal(repairCalls, 1);
 });
 
 test('优化建议与历史修复结果不再阻止当前合格课包进入 ready', async () => {
@@ -1298,14 +1431,24 @@ test('最终门禁重新计算质量时不受旧 needsReview 标记污染', () =
   assert.deepEqual(pack.evaluation.workflowFindings, []);
 });
 
-test('逐日质量判定给出可定位的质量底线规则', () => {
+test('逐日启发式深度不足给出可定位建议但不阻断学习', () => {
   const pack = completeV2Pack('pack-day-floor');
   pack.hub.chapters['module-1/day-01'] =
     '# Day 1\n\n内容很短。\n\n## 来源\n- [S1] [课程来源 1](https://example.edu/lesson-1)';
   const day = gateApi.evaluateDay(pack, 1);
-  assert.equal(day.passed, false);
+  assert.equal(day.passed, true);
   assert.ok(day.findings.some((finding) => finding.code === 'lesson.depth.floor'));
+  assert.ok(day.advisoryFindings.some((finding) => finding.code === 'lesson.depth.floor'));
   assert.ok(day.findings.every((finding) => finding.day === 1));
+});
+
+test('明确的待生成占位章节属于结构缺失并阻断发布', () => {
+  const pack = completeV2Pack('pack-placeholder');
+  pack.hub.chapters['module-1/day-01'] =
+    '# Day 1\n\n本章正在后台准备中，请稍后再试。\n\n<!-- zhijing:shallow -->';
+  const day = gateApi.evaluateDay(pack, 1);
+  assert.equal(day.passed, false);
+  assert.ok(day.blockingFindings.some((finding) => finding.code === 'lesson.placeholder'));
 });
 
 test('最终门复用逐日质量判定并把优化指标留作非阻塞建议', () => {
@@ -1497,6 +1640,36 @@ test('重新生成在新骨架前失败时保留旧课包可用状态', async ()
   assert.equal(deps.projects.get('project-1').packId, oldPack.id);
 });
 
+test('重新生成在新骨架后失败仍保留旧课包并记录待恢复候选包', async () => {
+  const oldPack = completePack('pack-old-ready');
+  oldPack.status = 'ready';
+  const candidate = completePack('pack-new-partial');
+  candidate.status = 'partial';
+  const deps = dependencies({
+    generator: {
+      async generate(_meta, _progress, options) {
+        options.onSkeletonReady(candidate);
+        throw Object.assign(new Error('network offline'), { code: 'NETWORK' });
+      },
+    },
+  });
+  deps.contentPack.save(oldPack);
+  deps.projects.update('project-1', { packId: oldPack.id, packStatus: 'ready' });
+  const workflow = createPackWorkflow(deps);
+
+  await assert.rejects(workflow.start(deps.projects.get('project-1')), /network offline/);
+  const project = deps.projects.get('project-1');
+  assert.equal(project.packId, oldPack.id);
+  assert.equal(project.packStatus, 'ready');
+  assert.equal(project.pendingPackId, candidate.id);
+  assert.equal(project.pendingPackStatus, 'partial');
+  assert.ok(deps.contentPack.load(candidate.id));
+  const failedCandidate = deps.contentPack.load(candidate.id);
+  assert.equal(failedCandidate.meta.generation.lastFailure.type, 'network');
+  assert.equal(failedCandidate.meta.performance.workflowRuns.at(-1).failureType, 'network');
+  assert.equal(failedCandidate.meta.performance.workflowRuns.at(-1).success, false);
+});
+
 test('启动恢复会把失去执行器的任务安全降级', async () => {
   const store = new MemoryStore();
   const pack = completePack();
@@ -1677,23 +1850,24 @@ test('空白练习题不能通过每日练习结构门禁', () => {
   assert.deepEqual(result.missingExerciseDays, [1, 2, 3, 4, 5, 6, 7]);
 });
 
-test('术语数量或可视化类型不达标时最终门禁拒绝', () => {
+test('术语数量或可视化类型不达启发式目标时只给建议', () => {
   const pack = completePack();
   pack.meta.quality.glossaryEnough = false;
   pack.meta.quality.glossaryKindCount = 1;
   const result = gateApi.evaluate(pack, { shouldRepair: () => false });
-  assert.equal(result.passed, false);
-  assert.ok(result.issues.includes('合格术语不足 8 条'));
+  assert.equal(result.passed, true);
+  assert.ok(result.advisoryFindings.some((finding) => finding.code === 'course.glossary-count'));
 });
 
-test('最终门禁会实际识别阶段 A-B-A 回跳', () => {
+test('最终门禁会识别阶段 A-B-A 回跳但不把启发式顺序当硬缺陷', () => {
   const pack = completePack();
   pack.plan[0].phase = 'A';
   pack.plan[1].phase = 'B';
   pack.plan[2].phase = 'A';
   const result = gateApi.evaluate(pack, { shouldRepair: () => false });
-  assert.equal(result.passed, false);
+  assert.equal(result.passed, true);
   assert.deepEqual(result.phaseBackjumpDays, [3]);
+  assert.ok(result.advisoryFindings.some((finding) => finding.code === 'course.phase-backjump'));
 });
 
 test('V2 完整课包通过证据、练习与累计作品门禁', () => {
@@ -2609,6 +2783,77 @@ test('今日页使用聚焦学习动线且保留所有功能锚点', () => {
   assert.match(html, /focus === 'feynman' \|\| focus === 'notes'/);
 });
 
+test('首次进入遮罩关闭或刷新后不会继续覆盖应用', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'css', 'splash.css'), 'utf8');
+  assert.match(css, /\.splash-gate\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
+});
+
+test('今日任务完成状态按项目、日期和日课隔离并参与进度', () => {
+  assert.ok(dailyLearningState, '应提供独立、可测试的每日任务状态模块');
+  const state = {};
+  const scopeA = dailyLearningState.scopeKey('project-a', '2026-08-28', 1);
+  const scopeB = dailyLearningState.scopeKey('project-a', '2026-08-29', 1);
+  const scopeC = dailyLearningState.scopeKey('project-b', '2026-08-28', 1);
+  assert.equal(dailyLearningState.setTaskDone(state, scopeA, 0, true), true);
+  assert.equal(dailyLearningState.setTaskDone(state, scopeA, 0, true), false);
+  assert.equal(dailyLearningState.setTaskDone(state, scopeA, 1, false), true);
+  assert.equal(dailyLearningState.isTaskDone(state, scopeA, 0), true);
+  assert.equal(dailyLearningState.isTaskDone(state, scopeB, 0), false);
+  assert.equal(dailyLearningState.isTaskDone(state, scopeC, 0), false);
+  assert.deepEqual(dailyLearningState.taskProgress(state, scopeA, 2), {
+    done: 1,
+    total: 2,
+    complete: false,
+  });
+});
+
+test('今日任务复用现有日课与练习反馈提供三段式学习引导', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /data-action="toggle-task"/);
+  assert.match(html, /怎么做/);
+  assert.match(html, /做成什么样/);
+  assert.match(html, /我做得怎么样/);
+  assert.match(html, /dailyTaskState/);
+});
+
+test('日课 Markdown 完成清单使用可交互复选框并同步主应用状态', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'ei-knowledge-hub', 'src', 'components', 'MarkdownContent.tsx'),
+    'utf8'
+  );
+  assert.match(source, /ChecklistInput/);
+  assert.match(source, /zhijing:checklist:set/);
+  assert.match(source, /dailyTaskState/);
+  assert.doesNotMatch(source, /disabled=\{true\}/);
+});
+
+test('长自检要点与参考内容在解析和渲染链路中不被截断', async () => {
+  const generator = loadPackGenerator({ fetch: async () => { throw new Error('unexpected fetch'); } });
+  assert.equal(typeof generator._test.normalizeDayMaterialRow, 'function');
+  const longQuestion = `长题目-${'问题内容'.repeat(120)}`;
+  const longRubric = `完整自检-${'判断依据与检查步骤'.repeat(100)}`;
+  const longRef = `完整参考-${'示例、边界和改进建议'.repeat(100)}`;
+  const row = {
+    day: 1,
+    resources: [
+      { title: '资料一', url: 'https://example.edu/a', type: 'article' },
+      { title: '资料二', url: 'https://example.org/b', type: 'report' },
+    ],
+    exercises: [0, 1, 2].map(() => ({ q: longQuestion, rubric: [longRubric, '第二条'], ref: longRef })),
+  };
+  const normalized = await generator._test.normalizeDayMaterialRow(
+    row,
+    { day: 1, topic: '可靠性', tasks: ['完成验证'] },
+    { industry: '软件', role: '测试员' }
+  );
+  assert.equal(normalized.exercises[0].q, longQuestion);
+  assert.equal(normalized.exercises[0].rubric[0], longRubric);
+  assert.equal(normalized.exercises[0].ref, longRef);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /\.practice-rubric[^}]*overflow\s*:\s*hidden/s);
+  assert.doesNotMatch(html, /\.practice-ref[^}]*-webkit-line-clamp/s);
+});
+
 test('使用指南按新今日页的任务、练习、复盘与打卡动线定位', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'onboarding.js'), 'utf8');
   assert.match(source, /任务清单[\s\S]*推荐资料[\s\S]*练习/);
@@ -2621,12 +2866,24 @@ test('使用指南按新今日页的任务、练习、复盘与打卡动线定�
   assert.match(html, /id="onboarding-step">1 \/ 9</);
 });
 
-test('未过质量门的路径明确标记需要修复并提供统一修复入口', () => {
+test('未过质量门的路径展示原因、影响与完整下一步而不是伪精确百分比', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.match(html, /已生成 · 需要修复/);
-  assert.match(html, /待修复：\$\{escapeHtml\(summary\)\}/);
-  assert.match(html, />修复课包<\/button>/);
+  assert.match(html, /查看失败原因/);
+  assert.match(html, /继续使用当前内容/);
+  assert.match(html, /重新生成问题部分/);
+  assert.match(html, /重新生成整个课包/);
+  assert.doesNotMatch(html, /98%|未达完美状态/);
   assert.doesNotMatch(html, /已生成 · 建议优化/);
+});
+
+test('课包未通过时至少有一项面向用户的质量检查明确失败', () => {
+  const pack = completePack('pack-visible-check');
+  delete pack.dayResources['3'];
+  const result = gateApi.evaluate(pack, null);
+  assert.equal(result.passed, false);
+  assert.ok(result.checks.some((check) => check.passed === false));
+  assert.equal(result.checks.find((check) => check.id === 'sources')?.passed, false);
 });
 
 test('生成失败时先清除 busy 再重绘路径卡片以显示继续补全', () => {
@@ -2714,4 +2971,25 @@ test('浏览器入口使用显式词法依赖，不依赖 window 同名属性', 
   assert.equal(received.generator, explicit.generator);
   assert.equal(received.projects, explicit.projects);
   assert.equal(await root.PackWorkflow.start({ id: 'project-1' }), 'started');
+});
+
+test('macOS 正式发布配置强制 Universal、签名、公证和发布前验证', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.equal(pkg.build.mac.hardenedRuntime, true);
+  assert.equal(pkg.build.mac.notarize, true);
+  assert.equal(pkg.build.mac.minimumSystemVersion, '12.0');
+  assert.ok(pkg.build.mac.target.every((target) => target.arch.includes('universal')));
+  assert.notEqual(pkg.build.mac.identity, null);
+  assert.ok(fs.existsSync(path.join(__dirname, '..', pkg.build.mac.entitlements)));
+  assert.ok(fs.existsSync(path.join(__dirname, '..', pkg.build.mac.entitlementsInherit)));
+
+  const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'build-mac.yml'), 'utf8');
+  assert.doesNotMatch(workflow, /CSC_IDENTITY_AUTO_DISCOVERY:\s*["']?false/);
+  assert.match(workflow, /codesign --verify/);
+  assert.match(workflow, /stapler validate/);
+  assert.match(workflow, /spctl --assess/);
+  assert.match(workflow, /lipo -archs/);
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+  assert.doesNotMatch(readme, /xattr\s+-cr/);
+  assert.match(readme, /mac-universal/);
 });
